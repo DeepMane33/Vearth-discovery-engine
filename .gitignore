@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+data/cache/
+data/reports/
+data/server.log
+data/server.err
+*.npz
+*.fits

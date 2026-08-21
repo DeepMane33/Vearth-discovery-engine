@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Discovery Engine · run{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>Autonomous Discovery Engine</h1>
+  <p>Five agents ingest satellite data, search for anomalies, validate them
+  against the literature, then draft a research paper. Pick a target or enter
+  your own TIC / TOI / star name.</p>
+</section>
+
+<section class="panel">
+  <form id="runForm" action="/run" method="post">
+    <label for="target">Target identifier</label>
+    <input id="target" name="target" list="known" placeholder="e.g. TIC 268684168"
+           value="{{ targets[0] }}" required autocomplete="off">
+    <datalist id="known">
+      {% for t in targets %}<option value="{{ t }}">{% endfor %}
+    </datalist>
+    <button type="submit" id="goBtn">Run discovery pipeline</button>
+  </form>
+</section>
+
+<details class="explain">
+  <summary>What the pipeline does</summary>
+  <ol>
+    <li><b>Collector</b> — pulls the TESS light curve from MAST (astroquery), cached locally. Falls back to a synthetic curve offline.</li>
+    <li><b>Memory</b> — a vector store of prior literature for retrieval (RAG).</li>
+    <li><b>Finder</b> — detrend + box-least-squares transit search + IsolationForest outlier flag.</li>
+    <li><b>Critic</b> — LLM drafts a hypothesis, self-questions it attack-by-attack, vetoes or advances.</li>
+    <li><b>Writer</b> — drafts an IMRaD report citing the exact data logs.</li>
+  </ol>
+</details>
+
+<div id="loader" class="loader hidden">
+  <div class="bar"><span></span></div>
+  <p>running the 5 agents. TESS download + LLM reasoning can take 30–90 s.</p>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const f = document.getElementById('runForm');
+const btn = document.getElementById('goBtn');
+const loader = document.getElementById('loader');
+f.addEventListener('submit', () => {
+  btn.disabled = true; btn.textContent = 'running…';
+  loader.classList.remove('hidden');
+});
+</script>
+{% endblock %}

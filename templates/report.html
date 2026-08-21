@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}{{ r.target or 'report' }} · discovery report{% endblock %}
+{% block content %}
+
+{% if r.error %}
+<div class="panel error">
+  <h2>Pipeline failed</h2>
+  <pre>{{ r.error }}</pre>
+  <p><a href="/">← back</a></p>
+</div>
+{% else %}
+
+<div class="breadcrumb"><a href="/">← new run</a></div>
+
+<h1 class="target-head">{{ r.target }}</h1>
+<div class="tags">
+  <span class="tag">collected {{ r.ingestion.n_points }} pts · {{ r.ingestion.source }}</span>
+  <span class="tag">depth {{ r.analysis.depth_ppm }} ppm</span>
+  <span class="tag">S/N {{ "%.1f"|format(r.analysis.snr) }}</span>
+  <span class="tag">P {{ r.analysis.period_days }} d</span>
+  <span class="tag">{{ r.analysis.n_transits }} transits</span>
+  <span class="tag veto {{ 'keep' if not r.validation.veto else 'veto' }}">
+    {{ 'ADVANCED' if not r.validation.veto else 'VETOED' }}
+  </span>
+</div>
+
+<section class="panel">
+  <h2>Stage 1 · Collector</h2>
+  <p>{{ r.ingestion.n_points }} points from source <code>{{ r.ingestion.source }}</code>.</p>
+</section>
+
+<section class="panel">
+  <h2>Stage 2-3 · Light curve + Finder</h2>
+  <img class="plot" src="{{ r.plot }}" alt="light curve">
+  <table class="metrics">
+    <tr><th>dip depth</th><td>{{ r.analysis.depth_ppm }} ppm</td></tr>
+    <tr><th>box-LS S/N</th><td>{{ "%.2f"|format(r.analysis.snr) }}</td></tr>
+    <tr><th>best period</th><td>{{ r.analysis.period_days }} days</td></tr>
+    <tr><th>recurrences</th><td>{{ r.analysis.n_transits }}</td></tr>
+    <tr><th>noise floor</th><td>{{ r.analysis.noise_floor_ppm }} ppm</td></tr>
+    <tr><th>reduced χ² (flat)</th><td>{{ "%.5f"|format(r.analysis.reduced_chi2) }}</td></tr>
+    <tr><th>IsolationForest outliers</th><td>{{ r.analysis.outlier_indices|length }}</td></tr>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Stage 4 · Critic &nbsp;<span class="conf">{{ r.validation.confidence }}</span>
+    &nbsp;<small>· {{ r.validation.llm_source }}</small></h2>
+  <p class="hyp"><b>Hypothesis:</b> {{ r.validation.hypothesis }}</p>
+  {% if r.validation.self_questions %}
+  <div class="qa">
+    {% for sq in r.validation.self_questions %}
+      {% if sq is mapping %}
+      <div class="q"><span class="qmark">Q</span>{{ sq.question }}</div>
+      <div class="a"><span class="amark">A</span>
+        {{ sq.answer }}
+        <span class="res {{ 'keep' if sq.resolved_true_or_false else 'veto' }}">
+          {{ 'confirmed' if sq.resolved_true_or_false else 'rejected' }}
+        </span>
+      </div>
+      {% else %}
+      <div class="q"><span class="qmark">Q</span>{{ sq }}</div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% if r.validation.rag_refs %}
+  <p class="refshead">Retrieved literature (RAG):</p>
+  <ul class="refs">
+    {% for ref in r.validation.rag_refs %}
+      <li>[{{ ref.id }}] &nbsp;score {{ ref.score }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <p class="vreason {{ 'keep' if not r.validation.veto else 'veto' }}">
+    <b>Ruling:</b> {{ r.validation.reason }}
+  </p>
+</section>
+
+<section class="panel paper">
+  <h2>Stage 5 · Research paper <span class="small">({{ r.paper.source }})</span></h2>
+  <div class="paperbody">
+    {{ r.paper.markdown|md }}
+  </div>
+</section>
+
+{% endif %}
+{% endblock %}

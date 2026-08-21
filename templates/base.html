@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Discovery Engine{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    <span class="name">Discovery Engine</span>
+    <span class="sub">autonomous space-research pipeline</span>
+  </div>
+  <div class="status">
+    {% if llm_ok %}<span class="ok">LLM live · {{ provider }}/{{ model }}</span>
+    {% else %}<span class="warn">no LLM · fallback mode</span>{% endif %}
+  </div>
+</header>
+<main class="container">
+{% block content %}{% endblock %}
+</main>
+<footer class="foot">multi-agent pipeline · collector → memory → finder → critic → writer</footer>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,37 @@
+[
+  {
+    "id": "ref-2012-bls",
+    "text": "Kovacs et al. 2002 Box-fitting Least Squares (BLS) detects periodic transitlike dips by folding the light curve on trial periods and fitting a box shape. A strong single BLS peak with shallow depth and short duration is the classic exoplanet signature. V-shaped deep transits are often grazing eclipsing binaries, not planets. Secondary eclipses indicate a binary star.",
+    "metadata": {}
+  },
+  {
+    "id": "ref-2015-cbv",
+    "text": "TESS / Kepler produce cotrending basis vectors (CBVs) that correct systematic detector trends from the spacecraft roll and thermal breathing. Uncorrected CBVs can mimic shallow dips at the orbital roll period (~13.7 days). If a candidate dip repeats at a known instrumental cadence it is likely an artifact, not astrophysical.",
+    "metadata": {}
+  },
+  {
+    "id": "ref-2018-contam",
+    "text": "Background contamination from a nearby unresolved star can dilute an eclipsing binary signal into a shallow planetlike transit (blending). Centroid shift analysis is required: a real planet dip has the flux centroid on the target star, while a blended binary shifts the centroid off-target during ingress and egress.",
+    "metadata": {}
+  },
+  {
+    "id": "ref-2019-ttics",
+    "text": "A genuine transiting exoplanet produces a transit with depth delta proportional to (Rp/Rs)^2, duration that scales with orbital velocity sqrt(GMs/a), and a period that obeys Kepler's third law P^2 = a^3 / Ms (in solar units). The light curve should be achromatic across TESS bandpasses and U-shaped for small planets.",
+    "metadata": {}
+  },
+  {
+    "id": "ref-2021-noise",
+    "text": "Statistical artifacts from single noisy points are ruled out by requiring multiple transit events at the same phase. A single dip with no recurrence is almost always a cosmic ray hit, momentum dump, or outlier and should be vetoed unless folded data strengthens the signal.",
+    "metadata": {}
+  },
+  {
+    "id": "ref-2023-falsepos",
+    "text": "False positive vetting requires rejecting eclipsing binaries through odd-even transit depth mismatch, secondary eclipse search, and centroid offset. Odd-even depth differences at >3 sigma strongly indicate a nearby eclipsing binary at twice the period rather than a planet.",
+    "metadata": {}
+  },
+  {
+    "id": "ref-2024-stellarvar",
+    "text": "Stellar variability such as starspots and flares produces quasi-periodic modulation on the stellar rotation period. Starspot crossings during transit can add asymmetry but do not produce a clean U-shaped box dip that repeats phase-locked across many orbits. Aperiodic flares are sharp and positive and do not repeat.",
+    "metadata": {}
+  }
+]
