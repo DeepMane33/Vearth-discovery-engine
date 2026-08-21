@@ -2,6 +2,7 @@
 
 Turns the validated candidate into a structured academic research paper.
 Cites the exact data logs it used."""
+import re
 from engine import llm
 
 
@@ -11,8 +12,44 @@ SYSTEM = (
     "structure (Abstract, Introduction, Data, Methods, Results, Discussion, "
     "Conclusion, References). Cite the exact data logs and retrieved "
     "literature IDs inline as [id]. Do not fabricate numbers beyond those "
-    "given. Keep tone formal and neutral."
+    "given. Keep tone formal and neutral. "
+    "IMPORTANT: Output ONLY clean Markdown. Do NOT use HTML tags like <h1>, <h2>, "
+    "<p>, <br>, <div>, <span>, etc. Use Markdown syntax: ## for headings, "
+    "blank lines for paragraphs, - for lists, | for tables."
 )
+
+
+def _clean_markdown(text: str) -> str:
+    """Strip HTML tags and normalize markdown output."""
+    if not text:
+        return ""
+    text = re.sub(r'<h1[^>]*>(.*?)</h1>', r'# \1', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<h2[^>]*>(.*?)</h2>', r'## \1', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<h3[^>]*>(.*?)</h3>', r'### \1', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<h4[^>]*>(.*?)</h4>', r'#### \1', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<h5[^>]*>(.*?)</h5>', r'##### \1', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<h6[^>]*>(.*?)</h6>', r'###### \1', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<p[^>]*>(.*?)</p>', r'\1\n\n', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+    text = re.sub(r'<div[^>]*>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'</div>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'<span[^>]*>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'</span>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'<strong[^>]*>(.*?)</strong>', r'**\1**', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<b[^>]*>(.*?)</b>', r'**\1**', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<em[^>]*>(.*?)</em>', r'*\1*', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<i[^>]*>(.*?)</i>', r'*\1*', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<code[^>]*>(.*?)</code>', r'`\1`', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<pre[^>]*>(.*?)</pre>', r'```\n\1\n```', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<ul[^>]*>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'</ul>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'<ol[^>]*>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'</ol>', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'<li[^>]*>(.*?)</li>', r'- \1\n', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<a[^>]*href=[^>]*>(.*?)</a>', r'\1', text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
 def write_paper(target, analysis, validation):
@@ -55,7 +92,8 @@ def write_paper(target, analysis, validation):
     if res["source"] == "fallback":
         md = _fallback_paper(target, analysis, validation, refs)
         return {"markdown": md, "source": "fallback", "facts_used": facts}
-    return {"markdown": res["text"], "source": res["source"],
+    md = _clean_markdown(res["text"])
+    return {"markdown": md, "source": res["source"],
             "facts_used": facts}
 
 
@@ -73,6 +111,10 @@ def _fallback_paper(target, analysis, validation, refs):
     verdict = "vetoed (most likely a false positive / noise)" if veto \
         else "advanced as a candidate of interest"
     rp_proxy = round((depth / 1e6) ** 0.5 * 100, 3)
+
+    rp_rearth = analysis.get("planet_radius_rearth")
+    rp_rjup = analysis.get("planet_radius_rjup")
+    r_star = analysis.get("stellar_radius_rsun")
 
     sq_lines = ""
     for sq in validation.get("self_questions", []):
@@ -125,9 +167,12 @@ stellar variability. Here we apply an autonomous vetting pipeline to {t}.
 | Noise floor | {noise} ppm |
 | Reduced χ² (flat model) | {chi2:.5f} |
 | IsolationForest outliers | {n_out} |
+| Stellar radius (Gaia) | {f"{r_star:.3f} R☉" if r_star else "N/A"} |
+| Planet radius | {f"{rp_rearth:.2f} R⊕ ({rp_rjup:.3f} Rjup)" if rp_rearth else "N/A (no stellar params)"} |
 
 Indicative companion radius (assuming total transit depth ≈ (Rp/Rs)²):
 **Rp ≈ {rp_proxy} Rs** (proxy — requires stellar radius for absolute value).
+{chr(10) if rp_rearth else ''}{f'**Planet radius (from Gaia stellar params): Rp ≈ {rp_rearth:.2f} R⊕ ({rp_rjup:.3f} Rjup)**  ' if rp_rearth else ''}{f'*Stellar radius: {r_star:.3f} R☉*' if r_star else ''}
 
 ## 5. Discussion — Self-Questioning
 {sq_lines}

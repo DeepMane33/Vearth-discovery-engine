@@ -2,13 +2,122 @@
 
 Pulls TESS light curves from MAST via astroquery, caches locally, and
 generates a synthetic light curve as a fall-back so the pipeline runs
-even without network access."""
+even without network access. Also queries SIMBAD, Gaia, and Vizier for
+comprehensive target metadata."""
 import time
 import json
 import numpy as np
 from pathlib import Path
 
 from config import CACHE_DIR, MAST_CACHE_DAYS
+
+
+def query_simbad(target):
+    """Query SIMBAD for basic target info (coordinates, type, magnitudes)."""
+    try:
+        from astroquery.simbad import Simbad
+        Simbad.add_votable_fields('ra', 'dec', 'otype', 'flux(V)', 'flux(J)', 'flux(K)')
+        result = Simbad.query_object(target)
+        if result is None:
+            return {}
+        return {
+            "ra": str(result['RA'][0]),
+            "dec": str(result['DEC'][0]),
+            "otype": str(result['OTYPE'][0]),
+            "v_mag": float(result['FLUX_V'][0]) if result['FLUX_V'][0] != '--' else None,
+            "j_mag": float(result['FLUX_J'][0]) if result['FLUX_J'][0] != '--' else None,
+            "k_mag": float(result['FLUX_K'][0]) if result['FLUX_K'][0] != '--' else None,
+        }
+    except Exception as e:
+        return {"error": f"SIMBAD: {type(e).__name__}"}
+
+
+def query_gaia(target):
+    """Query Gaia DR3 for parallax, proper motion, and photometry."""
+    try:
+        from astroquery.gaia import Gaia
+        Gaia.ROW_LIMIT = 5
+        job = Gaia.launch_job_async(
+            f"""
+            SELECT source_id, ra, dec, parallax, pmra, pmdec, phot_g_mean_mag,
+                   phot_bp_mean_mag, phot_rp_mean_mag, ruwe
+            FROM gaiadr3.gaia_source
+            WHERE 1=CONTAINS(POINT('ICRS', ra, dec),
+                             CIRCLE('ICRS', 
+                                    (SELECT ra FROM gaiadr3.gaia_source WHERE source_id =
+                                     (SELECT source_id FROM gaiadr3.gaia_source 
+                                      WHERE 1=CONTAINS(POINT('ICRS', ra, dec),
+                                                     CIRCLE('ICRS', 
+                                                            (SELECT ra FROM gaiadr3.gaia_source 
+                                                             WHERE source_name='{target}'
+                                                             LIMIT 1), 5/3600)) LIMIT 1),
+                                    5/3600))
+            ORDER BY parallax DESC
+            """
+        )
+        results = job.get_results()
+        if len(results) == 0:
+            return {}
+        row = results[0]
+        return {
+            "source_id": int(row['source_id']),
+            "ra": float(row['ra']),
+            "dec": float(row['dec']),
+            "parallax": float(row['parallax']),
+            "pmra": float(row['pmra']),
+            "pmdec": float(row['pmdec']),
+            "g_mag": float(row['phot_g_mean_mag']),
+            "bp_mag": float(row['phot_bp_mean_mag']),
+            "rp_mag": float(row['phot_rp_mean_mag']),
+            "ruwe": float(row['ruwe']),
+        }
+    except Exception as e:
+        return {"error": f"Gaia: {type(e).__name__}"}
+
+
+def query_vizier(target, radius_arcsec=30):
+    """Query Vizier catalog for known exoplanets, binaries, variables near target."""
+    try:
+        from astroquery.vizier import Vizier
+        from astroquery.simbad import Simbad
+        Simbad.add_votable_fields('ra', 'dec')
+        coord = Simbad.query_object(target)
+        if coord is None:
+            return {}
+        ra, dec = str(coord['RA'][0]), str(coord['DEC'][0])
+        Vizier.ROW_LIMIT = 20
+        catalogs = Vizier.query_region(
+            f"{ra} {dec}",
+            radius=f"{radius_arcsec}s",
+            catalog=["B/exoplanet", "B/ebcat", "B/vsx", "J/ApJS/211/24"],
+        )
+        out = []
+        for cat in catalogs:
+            for row in cat:
+                out.append({k: row[k] for k in row.colnames if row[k] != '--'})
+        return {"matches": out[:10]}
+    except Exception as e:
+        return {"error": f"Vizier: {type(e).__name__}"}
+
+
+def fetch_comprehensive_metadata(target):
+    """Fetch metadata from all available astroquery services."""
+    return {
+        "simbad": query_simbad(target),
+        "gaia": query_gaia(target),
+        "vizier": query_vizier(target),
+    }
+
+
+def _manifest():
+    f = CACHE_DIR / "ingest_manifest.json"
+    if f.exists():
+        return json.loads(f.read_text())
+    return {}
+
+
+def _save_manifest(m):
+    (CACHE_DIR / "ingest_manifest.json").write_text(json.dumps(m, indent=2))
 
 
 def _manifest():
@@ -24,14 +133,17 @@ def _save_manifest(m):
 
 def fetch_tess_light_curve(target="TIC 268684168", n_samples=2000):
     """Download a TESS light curve from MAST. Returns dict of arrays.
-    Falls back to synthetic data if offline / astroquery missing."""
+    Falls back to synthetic data if offline / astroquery missing.
+    Also attaches comprehensive metadata from SIMBAD, Gaia, Vizier."""
     key = target.replace(" ", "_")
     out = CACHE_DIR / f"{key}.npz"
 
     m = _manifest()
     if out.exists() and (time.time() - m.get(key, 0)) < MAST_CACHE_DAYS * 86400:
         z = np.load(out)
-        return {k: z[k] for k in z.files}
+        result = {k: z[k] for k in z.files}
+        result["metadata"] = fetch_comprehensive_metadata(target)
+        return result
 
     try:
         from astroquery.mast import Observations
@@ -77,7 +189,9 @@ def fetch_tess_light_curve(target="TIC 268684168", n_samples=2000):
         np.savez(out, time=t, flux=f, target=target, source="mast_tess")
         m[key] = time.time()
         _save_manifest(m)
-        return {"time": t, "flux": f, "target": target, "source": "mast_tess"}
+        result = {"time": t, "flux": f, "target": target, "source": "mast_tess"}
+        result["metadata"] = fetch_comprehensive_metadata(target)
+        return result
     except Exception as e:
         lc = _synthetic_light_curve(n_samples, seed=hash(target) % 2 ** 31)
         lc["source"] = "synthetic"
@@ -85,6 +199,7 @@ def fetch_tess_light_curve(target="TIC 268684168", n_samples=2000):
         np.savez(out, **lc)
         m[key] = time.time()
         _save_manifest(m)
+        lc["metadata"] = fetch_comprehensive_metadata(target)
         return lc
 
 

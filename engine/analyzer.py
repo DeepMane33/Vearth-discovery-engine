@@ -5,6 +5,7 @@ Runs anomaly detection and a transit search over the light curve:
   - Box-fitting Least-Squares-style transit search on folded trial periods
   - IsolationForest for generic point outliers
   - Recurrence check to flag periodic dips
+  - Uses Gaia/SIMBAD metadata for stellar parameters when available
 """
 import numpy as np
 from sklearn.ensemble import IsolationForest
@@ -71,7 +72,53 @@ def isolation_outliers(time, flux):
     return idx.tolist(), f, np.asarray(f - 1.0)
 
 
-def analyze(time, flux):
+def _estimate_stellar_radius(metadata):
+    """Estimate stellar radius from Gaia parallax and photometry."""
+    gaia = metadata.get("gaia", {})
+    if not gaia or "parallax" not in gaia or gaia["parallax"] <= 0:
+        return None
+    g_mag = gaia.get("g_mag")
+    bp_mag = gaia.get("bp_mag")
+    rp_mag = gaia.get("rp_mag")
+    if g_mag is None or bp_mag is None or rp_mag is None:
+        return None
+    parallax = gaia["parallax"]  # mas
+    distance_pc = 1000.0 / parallax
+    bp_rp = bp_mag - rp_mag
+    abs_g = g_mag - 5 * np.log10(distance_pc / 10.0)
+    if bp_rp < 0.5:
+        bc = -0.19
+    elif bp_rp < 1.0:
+        bc = -0.10
+    elif bp_rp < 1.5:
+        bc = 0.15
+    elif bp_rp < 2.0:
+        bc = 0.55
+    elif bp_rp < 2.5:
+        bc = 1.05
+    elif bp_rp < 3.0:
+        bc = 1.60
+    else:
+        bc = 2.20
+    abs_bol = abs_g + bc
+    L_sun = 10 ** ((4.74 - abs_bol) / 2.5)
+    if bp_rp < 0.8:
+        Teff = 10000
+    elif bp_rp < 1.2:
+        Teff = 7500
+    elif bp_rp < 1.6:
+        Teff = 6000
+    elif bp_rp < 2.0:
+        Teff = 5000
+    elif bp_rp < 2.4:
+        Teff = 4000
+    else:
+        Teff = 3300
+    R_sun = np.sqrt(L_sun) * (5778 / Teff) ** 2
+    return float(R_sun)
+
+
+def analyze(time, flux, metadata=None):
     t = np.asarray(time, dtype=float)
     fl = np.asarray(flux, dtype=float)
 
@@ -83,7 +130,7 @@ def analyze(time, flux):
     noise_floor = float(np.std(resid[np.abs(resid) < 0.002]))
     chi_squared_reduced = float(np.var(1.0 - f)) if len(f) else 0.0
 
-    return {
+    result = {
         "transit": hit,
         "is_anomaly": is_anomaly,
         "outlier_indices": out_idx,
@@ -95,3 +142,16 @@ def analyze(time, flux):
         "reduced_chi2": float(chi_squared_reduced),
         "flux_residuals": resid,
     }
+
+    if metadata:
+        R_star = _estimate_stellar_radius(metadata)
+        if R_star and hit["depth"] > 0:
+            depth_frac = hit["depth"]
+            Rp_Rs = np.sqrt(depth_frac)
+            Rp_Rearth = Rp_Rs * R_star * 109.2
+            result["stellar_radius_rsun"] = R_star
+            result["planet_radius_rearth"] = float(Rp_Rearth)
+            result["planet_radius_rjup"] = float(Rp_Rearth / 11.2)
+        result["metadata"] = metadata
+
+    return result

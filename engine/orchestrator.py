@@ -13,7 +13,7 @@ def run(target):
     """Run the full discovery pipeline for a target.
     Returns a dict with every stage's output plus a base64 plot."""
     lc = ingestion.fetch_tess_light_curve(target)
-    analysis = analyzer.analyze(lc["time"], lc["flux"])
+    analysis = analyzer.analyze(lc["time"], lc["flux"], metadata=lc.get("metadata"))
     validation = critic.validate(analysis, target)
     paper = synthesizer.write_paper(target, analysis, validation)
     plot = _plot(lc["time"], lc["flux"], analysis)
@@ -21,7 +21,8 @@ def run(target):
     return {
         "target": target,
         "ingestion": {"source": lc.get("source", "unknown"),
-                      "n_points": int(len(lc["time"]))},
+                      "n_points": int(len(lc["time"])),
+                      "metadata": lc.get("metadata", {})},
         "analysis": analysis,
         "validation": validation,
         "paper": paper,
