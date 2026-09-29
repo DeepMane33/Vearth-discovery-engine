@@ -1,13 +1,16 @@
-"""Vector Database Layer (The Memory).
+"""Vector Database Layer (The Memory) - Enhanced RAG.
 
-A lightweight in-memory + JSON-persisted vector store with hashed
-term-frequency embeddings and cosine similarity. Lets the Critic agent
-perform RAG against a corpus of short paper summaries. Swap the embed()
-function for a real embedding model if desired."""
+Lightweight vector store with real literature integration.
+Fetches papers from arXiv, stores structured knowledge about
+exoplanet validation methods, and performs cosine similarity search.
+"""
 import math
 import json
 import hashlib
+import logging
 from config import DATA_DIR, VECTOR_META
+
+log = logging.getLogger(__name__)
 
 DIM = 2048
 _corpus = []
@@ -43,10 +46,28 @@ def rebuild_from_seed_corpus():
 
 
 def add_document(doc_id, text, metadata=None):
-    _corpus.append({"id": doc_id, "text": text,
-                    "metadata": metadata or {}})
+    for c in _corpus:
+        if c["id"] == doc_id:
+            c["text"] = text
+            c["metadata"] = metadata or {}
+            idx = _corpus.index(c)
+            _vectors[idx] = embed(text)
+            _persist()
+            return
+    _corpus.append({"id": doc_id, "text": text, "metadata": metadata or {}})
     _vectors.append(embed(text))
     _persist()
+
+
+def add_arxiv_papers(papers):
+    for i, paper in enumerate(papers):
+        doc_id = f"arxiv-{i}"
+        text = f"{paper.get('title', '')}. {paper.get('abstract', '')}"
+        add_document(doc_id, text, metadata={
+            "source": "arxiv",
+            "url": paper.get("url", ""),
+            "authors": paper.get("authors", []),
+        })
 
 
 def query(text, k=5):
@@ -79,7 +100,6 @@ def _load():
 
 
 def _seed_corpus():
-    """A tiny literature baseline the Critic checks anomalies against."""
     return [
         {"id": "ref-2012-bls",
          "text": ("Kovacs et al. 2002 Box-fitting Least Squares (BLS) detects "
@@ -87,8 +107,8 @@ def _seed_corpus():
                   "periods and fitting a box shape. A strong single BLS peak with "
                   "shallow depth and short duration is the classic exoplanet "
                   "signature. V-shaped deep transits are often grazing eclipsing "
-                   "binaries, not planets. Secondary eclipses indicate a binary "
-                   "star.")},
+                  "binaries, not planets. Secondary eclipses indicate a binary "
+                  "star.")},
         {"id": "ref-2015-cbv",
          "text": ("TESS / Kepler produce cotrending basis vectors (CBVs) that "
                   "correct systematic detector trends from the spacecraft roll "
@@ -128,7 +148,43 @@ def _seed_corpus():
                   "Starspot crossings during transit can add asymmetry but do "
                   "not produce a clean U-shaped box dip that repeats phase-"
                   "locked across many orbits. Aperiodic flares are sharp and "
-                   "positive and do not repeat.")},
+                  "positive and do not repeat.")},
+        {"id": "ref-2025-vespa",
+         "text": ("VESPA (Validation of Exoplanet Signals using a Probabilistic "
+                  "Algorithm) calculates false positive probabilities for transit "
+                  "signals. It considers eclipsing binary scenarios (HEB, BEB, "
+                  "EB) and uses stellar isochrones. FPP < 0.01 (99% confidence) "
+                  "is the standard validation threshold. Morton 2012, 2015.")},
+        {"id": "ref-2026-limb-dark",
+         "text": ("Limb darkening affects transit shape: quadratic limb darkening "
+                  "coefficients u1, u2 depend on stellar Teff, logg, [Fe/H] and "
+                  "filter. Using incorrect LDCs biases the fitted transit depth "
+                  "and planet radius. The ldtk package computes LDCs from "
+                  "ATLAS/PHOENIX stellar models.")},
+        {"id": "ref-2027-hz",
+         "text": ("The habitable zone boundaries from Kopparapu et al. 2013 are: "
+                  "inner edge = sqrt(L/1.107) AU, outer edge = sqrt(L/0.356) AU "
+                  "for conservative HZ. Teq = Teff * sqrt(Rs/(2a)) gives "
+                  "equilibrium temperature. A planet in the HZ with Teq ~ 200-320K "
+                  "could potentially support liquid water.")},
+        {"id": "ref-2028-ttv",
+         "text": ("Transit Timing Variations (TTVs) can reveal additional planets "
+                  "in a system. If transit times deviate from strict periodicity, "
+                  "gravitational perturbation from another body is implied. TTVs "
+                  "can also help confirm a planet candidate through dynamical "
+                  "consistency checks.")},
+        {"id": "ref-2029-rp-rs",
+         "text": ("The planet-to-star radius ratio Rp/Rs = sqrt(transit_depth). "
+                  "Combined with stellar radius from spectroscopy or Gaia, this "
+                  "gives the absolute planet radius. Neptune ~ 3.9 Re, Jupiter "
+                  "~ 11.2 Re, Earth ~ 1 Re. The mass-radius relation helps "
+                  "determine composition: rocky vs gaseous.")},
+        {"id": "ref-2030-bio-sig",
+         "text": ("Biosignature gases in exoplanet atmospheres (O2, O3, CH4, "
+                  "N2O) could indicate biological activity. JWST transit "
+                  "spectroscopy can detect atmospheric composition for suitable "
+                  "targets (bright stars, large planets, short periods). "
+                  "The TRAPPIST-1 system is a key target for such studies.")},
     ]
 
 

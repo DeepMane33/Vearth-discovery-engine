@@ -22,3 +22,7 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "cerebras")
 LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b")
 
 MAST_CACHE_DAYS = int(os.getenv("MAST_CACHE_DAYS", "7"))
+
+# Research Engine
+NASA_ADS_TOKEN = os.getenv("NASA_ADS_TOKEN", "")
+RESEARCH_CACHE_DAYS = int(os.getenv("RESEARCH_CACHE_DAYS", "30"))

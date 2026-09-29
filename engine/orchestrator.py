@@ -1,62 +1,303 @@
-"""Orchestrator - coordinates the 5 agents end-to-end."""
-import io
-import base64
+"""Orchestrator - Coordinates the VEARTH discovery pipeline (v3.0).
+
+Stages:
+  1. COLLECT     - Fetch TESS light curve + stellar parameters + multi-mission
+  2. CROSS-MATCH - Check if target already has known planets
+  3. ANALYZE     - Real BLS + transit fitting + physics (sequential multi-planet)
+  4. VALIDATE    - 17-test verification battery
+  5. SELF-VERIFY - AI self-dialog anti-hallucination
+  6. PLOT        - Publication-quality figures
+  7. SYNTHESIZE  - Write research paper
+  8. SAVE        - Store results
+
+v3.0 enhancements:
+  - Sequential multi-planet detection (up to 5 planets)
+  - Monte Carlo uncertainty propagation
+  - Multi-mission data integration (TESS + Kepler + Gaia + TIC)
+  - 17 validation tests (up from 10)
+"""
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
-from engine import ingestion, analyzer, critic, synthesizer
+from engine import ingestion, analyzer, critic, verifier, synthesizer, plots
+from engine import physics
 
 
-def run(target):
-    """Run the full discovery pipeline for a target.
-    Returns a dict with every stage's output plus a base64 plot."""
-    lc = ingestion.fetch_tess_light_curve(target)
-    analysis = analyzer.analyze(lc["time"], lc["flux"], metadata=lc.get("metadata"))
-    validation = critic.validate(analysis, target)
-    paper = synthesizer.write_paper(target, analysis, validation)
-    plot = _plot(lc["time"], lc["flux"], analysis)
+def _remove_signal_and_rediscover(time_arr, flux_arr, period, t0, depth,
+                                   max_planets=5):
+    """Sequentially detect and remove planet signals.
+
+    After finding a transit, subtract it and search for more planets.
+    Returns list of (analysis, time, flux) for each detected planet.
+    """
+    results = []
+    t = np.copy(time_arr)
+    f = np.copy(flux_arr)
+
+    for planet_num in range(max_planets):
+        analysis = analyzer.analyze(t, f)
+
+        if not analysis.get("is_anomaly"):
+            break
+        if analysis.get("snr", 0) < 5.0:
+            break
+
+        results.append({
+            "planet_number": planet_num + 1,
+            "analysis": analysis,
+            "time_arr": t,
+            "flux_arr": f,
+        })
+
+        transit = analysis.get("transit", {})
+        p = transit.get("period")
+        t0_found = transit.get("t0", 0.0)
+        d = analysis.get("depth_ppm", 0) / 1e6
+
+        if not p or p <= 0 or d <= 0:
+            break
+
+        phase = (t - t0_found) % p / p
+        in_transit = (phase < 0.05) | (phase > 0.95)
+        out_transit = ~in_transit
+
+        if in_transit.sum() < 3:
+            break
+
+        model = np.ones_like(f)
+        model[in_transit] = 1.0 - d
+        f = f / model
+        f = f / np.nanmedian(f)
+
+    return results
+
+
+def _monte_carlo_uncertainty(time_arr, flux_arr, n_iterations=500):
+    """Bootstrap Monte Carlo for parameter uncertainty propagation.
+
+    Perturbs the light curve within noise, re-runs BLS, returns
+    posterior distributions for period, depth, duration.
+    """
+    rng = np.random.default_rng(42)
+    t = np.asarray(time_arr, dtype=float)
+    f = np.asarray(flux_arr, dtype=float)
+
+    noise = np.std(f[np.abs(f - 1.0) < 0.01]) if np.sum(np.abs(f - 1.0) < 0.01) > 10 else 0.001
+
+    periods = []
+    depths = []
+    snrs = []
+
+    for _ in range(n_iterations):
+        f_perturbed = f + rng.normal(0, noise, len(f))
+
+        try:
+            ana = analyzer.analyze(t, f_perturbed)
+            transit = ana.get("transit", {})
+            if transit.get("period") and transit.get("period") > 0:
+                periods.append(transit["period"])
+                depths.append(ana.get("depth_ppm", 0))
+                snrs.append(ana.get("snr", 0))
+        except Exception:
+            continue
+
+    if len(periods) < 10:
+        return {
+            "iterations": len(periods),
+            "period_mean": None,
+            "period_std": None,
+            "period_median": None,
+            "period_1sigma": (None, None),
+            "depth_mean": None,
+            "depth_std": None,
+            "depth_median": None,
+            "depth_1sigma": (None, None),
+            "snr_mean": None,
+            "snr_std": None,
+        }
+
+    periods = np.array(periods)
+    depths = np.array(depths)
+    snrs = np.array(snrs)
 
     return {
-        "target": target,
-        "ingestion": {"source": lc.get("source", "unknown"),
-                      "n_points": int(len(lc["time"])),
-                      "metadata": lc.get("metadata", {})},
-        "analysis": analysis,
-        "validation": validation,
-        "paper": paper,
-        "plot": plot,
+        "iterations": len(periods),
+        "period_mean": round(float(np.mean(periods)), 6),
+        "period_std": round(float(np.std(periods)), 6),
+        "period_median": round(float(np.median(periods)), 6),
+        "period_1sigma": (
+            round(float(np.percentile(periods, 16)), 6),
+            round(float(np.percentile(periods, 84)), 6),
+        ),
+        "depth_mean": round(float(np.mean(depths)), 1),
+        "depth_std": round(float(np.std(depths)), 1),
+        "depth_median": round(float(np.median(depths)), 1),
+        "depth_1sigma": (
+            round(float(np.percentile(depths, 16)), 1),
+            round(float(np.percentile(depths, 84)), 1),
+        ),
+        "snr_mean": round(float(np.mean(snrs)), 2),
+        "snr_std": round(float(np.std(snrs)), 2),
     }
 
 
-def _plot(time, flux, analysis):
-    fig, ax = plt.subplots(figsize=(8, 3.0), dpi=100)
-    f = np.asarray(flux, float)
-    f = f / np.median(f)
-    ax.scatter(time, f, s=2, color="#334155", alpha=0.7, label="flux")
+def run(target, progress_callback=None):
+    """Run the full VEARTH discovery pipeline for a target.
 
-    out = set(analysis.get("outlier_indices", []))
-    if out:
-        idx = np.array(sorted(out))
-        ax.scatter(np.asarray(time)[idx],
-                   np.asarray(flux)[idx] / np.median(flux),
-                   s=14, color="#b91c1c", label="isolated outliers",
-                   zorder=5)
+    Args:
+        target: Star/planet identifier (e.g., "TIC 268684168")
+        progress_callback: Optional callable(stage_name, message) for progress updates
+    """
+    def _progress(stage, msg):
+        if progress_callback:
+            progress_callback(stage, msg)
 
-    p = analysis.get("period_days")
-    if p:
-        ax.set_title(f"{analysis.get('depth_ppm')} ppm dip, "
-                     f"P={p:.3f} d, S/N={analysis.get('snr'):.1f}",
-                     fontsize=9)
-    ax.set_xlabel("BJD - 2457000 (days)", fontsize=8)
-    ax.set_ylabel("normalised flux", fontsize=8)
-    ax.legend(fontsize=7)
-    ax.tick_params(labelsize=7)
-    fig.tight_layout()
+    _progress("collect", "Fetching stellar parameters and light curve...")
 
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=100)
-    plt.close(fig)
-    b = base64.b64encode(buf.getvalue()).decode()
-    return f"data:image/png;base64,{b}"
+    stellar_info = ingestion.fetch_stellar_info(target)
+
+    try:
+        from engine.datasources import multi_mission_summary
+        mission_summary = multi_mission_summary(target)
+        stellar_info["mission_summary"] = mission_summary
+    except Exception:
+        stellar_info["mission_summary"] = {"available_missions": ["TESS"]}
+
+    lc = ingestion.fetch_tess_light_curve(target)
+
+    _progress("crossmatch", "Checking for known planets in catalogs...")
+
+    known_planets = None
+    try:
+        from engine.datasources import query_simbad_coordinates, get_known_planets_near
+        coords = query_simbad_coordinates(target)
+        if coords.get("ra") and coords.get("dec"):
+            known_planets = get_known_planets_near(
+                float(coords["ra"]), float(coords["dec"]), radius_deg=0.15)
+    except Exception:
+        known_planets = []
+
+    _progress("analyze", "Running BLS transit search and multi-planet detection...")
+
+    multi_planet_results = _remove_signal_and_rediscover(
+        lc["time"], lc["flux"],
+        period=None, t0=None, depth=None,
+        max_planets=5,
+    )
+
+    if multi_planet_results:
+        primary = multi_planet_results[0]["analysis"]
+    else:
+        primary = analyzer.analyze(lc["time"], lc["flux"])
+
+    _progress("physics", "Computing planet physics and atmospheric characterization...")
+
+    physics_data = physics.compute_all_physics(primary, stellar_info)
+
+    all_planets = []
+    for pm in multi_planet_results:
+        p_analysis = pm["analysis"]
+        p_physics = physics.compute_all_physics(p_analysis, stellar_info)
+        all_planets.append({
+            "planet_number": pm["planet_number"],
+            "analysis": {
+                "depth_ppm": p_analysis.get("depth_ppm", 0),
+                "snr": p_analysis.get("snr", 0),
+                "period_days": p_analysis.get("period_days"),
+                "n_transits": p_analysis.get("n_transits", 0),
+            },
+            "physics": p_physics,
+            "vetoed": False,
+        })
+
+    _progress("montecarlo", "Running Monte Carlo uncertainty propagation...")
+
+    mc_results = _monte_carlo_uncertainty(lc["time"], lc["flux"], n_iterations=500)
+
+    _progress("validate", "Running 17-test verification battery...")
+
+    validation = critic.validate(
+        primary, target,
+        time_arr=lc["time"],
+        flux_arr=lc["flux"],
+        known_planets=known_planets,
+    )
+
+    for pm in all_planets:
+        if pm["planet_number"] > 1:
+            p_analysis = pm["analysis"]
+            vt_simple = {
+                "snr": p_analysis.get("snr", 0),
+                "n_transits": p_analysis.get("n_transits", 0),
+                "depth_ppm": p_analysis.get("depth_ppm", 0),
+            }
+            pm["vetoed"] = (
+                vt_simple["snr"] < 7.0 or
+                vt_simple["n_transits"] < 3 or
+                vt_simple["depth_ppm"] < 50 or
+                vt_simple["depth_ppm"] > 50000
+            )
+
+    _progress("verify", "Running AI self-verification dialog...")
+
+    self_verify = verifier.self_dialog_verify(
+        primary, target, validation, stellar_info, physics_data)
+
+    if self_verify.get("final_verdict") == "rejected":
+        validation["veto"] = True
+        validation["confidence"] = "low"
+        validation["reason"] = (
+            "AI self-verification rejected: " +
+            self_verify.get("summary", "failed verification rounds")
+        )
+    elif self_verify.get("final_verdict") == "confirmed_known":
+        validation["veto"] = True
+        validation["confidence"] = "high"
+        validation["reason"] = (
+            "Signal matches a known planet in the Exoplanet Archive: " +
+            self_verify.get("summary", "")
+        )
+    elif self_verify.get("final_verdict") == "candidate":
+        if self_verify.get("confidence", 0) >= 60:
+            validation["veto"] = False
+            validation["confidence"] = "medium" if self_verify["confidence"] < 80 else "high"
+
+    _progress("plot", "Generating publication-quality figures...")
+
+    gen_plots = plots.generate_all_plots(lc["time"], lc["flux"], primary)
+
+    if len(all_planets) > 1:
+        gen_plots["multi_planet_comparison"] = plots.plot_multi_planet(all_planets)
+
+    if mc_results.get("iterations", 0) > 50:
+        gen_plots["mc_distributions"] = plots.plot_monte_carlo(mc_results)
+
+    _progress("synthesize", "Writing IMRaD research paper...")
+
+    paper = synthesizer.write_paper(
+        target, primary, validation,
+        stellar_info=stellar_info,
+        physics_data=physics_data,
+        plots=gen_plots,
+        multi_planet_data=all_planets,
+        mc_results=mc_results,
+    )
+
+    _progress("done", "Pipeline complete.")
+
+    return {
+        "target": target,
+        "ingestion": {
+            "source": lc.get("source", "unknown"),
+            "n_points": int(len(lc["time"])),
+            "mission_summary": stellar_info.get("mission_summary", {}),
+        },
+        "stellar_info": stellar_info,
+        "analysis": primary,
+        "physics": physics_data,
+        "validation": validation,
+        "self_verification": self_verify,
+        "paper": paper,
+        "plots": gen_plots,
+        "known_planets": known_planets or [],
+        "multi_planet_results": all_planets,
+        "monte_carlo": mc_results,
+    }

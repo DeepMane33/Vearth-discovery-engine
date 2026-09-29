@@ -1,9 +1,11 @@
-"""Data Ingestion Agent (The Collector).
+"""Data Ingestion Agent (The Collector) - Enhanced.
 
 Pulls TESS light curves from MAST via astroquery, caches locally, and
 generates a synthetic light curve as a fall-back so the pipeline runs
-even without network access. Also queries SIMBAD, Gaia, and Vizier for
-comprehensive target metadata."""
+even without network access. Also queries SIMBAD, Gaia, Vizier, and
+the NASA Exoplanet Archive for comprehensive target metadata and
+stellar parameters.
+"""
 import time
 import json
 import numpy as np
@@ -129,6 +131,45 @@ def _manifest():
 
 def _save_manifest(m):
     (CACHE_DIR / "ingest_manifest.json").write_text(json.dumps(m, indent=2))
+
+
+def fetch_stellar_info(target):
+    """Fetch stellar parameters from SIMBAD and NASA Exoplanet Archive."""
+    try:
+        from engine.datasources import query_simbad_coordinates, get_stellar_params
+        simbad = query_simbad_coordinates(target)
+        archive = get_stellar_params(target)
+
+        stellar = {
+            "name": target,
+            "ra": simbad.get("ra"),
+            "dec": simbad.get("dec"),
+            "otype": simbad.get("otype", ""),
+            "mag_v": simbad.get("mag_v"),
+        }
+
+        if archive:
+            stellar.update({
+                "teff": archive.get("pl_star_teff"),
+                "logg": archive.get("pl_starlogg"),
+                "feh": archive.get("pl_star_feh"),
+                "radius_rsun": archive.get("pl_star_radius"),
+                "mass_msun": archive.get("pl_star_mass"),
+            })
+        else:
+            stellar.update({
+                "teff": None, "logg": None, "feh": None,
+                "radius_rsun": None, "mass_msun": None,
+            })
+
+        return stellar
+    except Exception as e:
+        return {
+            "name": target, "ra": None, "dec": None,
+            "teff": None, "logg": None, "feh": None,
+            "radius_rsun": None, "mass_msun": None,
+            "error": str(e),
+        }
 
 
 def fetch_tess_light_curve(target="TIC 268684168", n_samples=2000):

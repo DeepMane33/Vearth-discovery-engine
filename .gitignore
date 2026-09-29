@@ -4,6 +4,8 @@ __pycache__/
 *.pyo
 data/cache/
 data/reports/
+data/papers/
+data/papers_meta.json
 data/server.log
 data/server.err
 *.npz

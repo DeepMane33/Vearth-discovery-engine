@@ -1,4 +1,4 @@
-# Discovery Engine
+# VEARTH Discovery Engine v3.0
 
 An autonomous, multi-agent space-research pipeline. It pulls real TESS
 satellite data, searches the light curve for transit-like anomalies, then a
@@ -6,13 +6,27 @@ critic agent self-questions the finding from every angle against a literature
 memory (RAG) and either **veto**s or **advance**s it. A writer agent then
 drafts an IMRaD research report citing the exact data logs.
 
-Five agents, one loop:
+## v3.0 Enhancements
 
-1. **Collector** — `astroquery.mast` downloads the TESS light curve (cached). Falls back to a synthetic curve offline.
-2. **Memory** — a vector store of prior literature for retrieval (RAG).
-3. **Finder** — detrend + box-least-squares transit search + IsolationForest outliers (scikit-learn).
-4. **Critic** — drafts a hypothesis, attacks it with skeptical self-questions, cross-checks each against retrieved literature, then veto / advance.
-5. **Writer** — writes the IMRaD paper, citing data logs + literature IDs.
+- **17-test verification battery** (up from 10): phase curve, chromaticity, harmonic alias, transit shape metrics, window function, stellar density consistency
+- **Multi-planet detection**: Sequentially detects up to 5 planets per target
+- **Monte Carlo uncertainty**: 500-iteration bootstrap for parameter posteriors
+- **Atmospheric characterization**: TSM/ESM metrics for JWST observability
+- **Orbital dynamics**: Hill stability, tidal locking, eccentricity constraints
+- **Multi-mission data**: Gaia DR3, TIC, Kepler/K2 cross-matching
+- **Mass-radius relations**: Chen & Kipping (2017) mass estimates, bulk density
+- **Enhanced AI dialog**: Physics-informed self-verification with atmospheric metrics
+
+Eight stages, one loop:
+
+1. **Collector** — `astroquery.mast` downloads the TESS light curve (cached). Also queries Gaia DR3, TIC, and Kepler/K2. Falls back to a synthetic curve offline.
+2. **Cross-match** — checks NASA Exoplanet Archive for known planets near the target.
+3. **Finder** — detrend + box-least-squares transit search + IsolationForest outliers. Sequentially detects up to 5 planets.
+4. **Validator** — 17-test verification battery (SNR, recurrence, odd-even, secondary eclipse, V-shape, bootstrap FAP, stellar variability, physical plausibility, catalog cross-match, phase curve, chromaticity, harmonic alias, transit shape, window function, stellar density consistency).
+5. **Critic** — LLM drafts a hypothesis, attacks it with skeptical self-questions, cross-checks each against retrieved literature, then veto / advance.
+6. **Verifier** — 4-round AI self-verification with physics evidence (atmospheric metrics, orbital stability, mass-radius).
+7. **Writer** — writes the IMRaD paper with multi-planet comparison, Monte Carlo uncertainties, and JWST characterization metrics.
+8. **Save** — stores results as JSON with publication-quality figures.
 
 ## Quick start
 
@@ -50,12 +64,17 @@ transparent, rule-based fallback for the Critic and Writer (clearly labelled
 app.py                 Flask server
 config.py              env + paths
 engine/
-  ingestion.py         Collector
+  ingestion.py         Collector (TESS + multi-mission)
   vectorstore.py        Memory (RAG)
-  analyzer.py          Finder (ML)
-  critic.py            Critic (self-questioning)
-  synthesizer.py        Writer (paper)
-  orchestrator.py      runs all 5 agents + plot
+  analyzer.py          Finder (ML) + multi-planet detection
+  critic.py            Critic (self-questioning) + 17-test validation
+  validation_tests.py  17 verification tests
+  physics.py           Planet physics + atmospheric metrics
+  datasources.py       SIMBAD, Exoplanet Archive, Gaia, TIC, arXiv
+  verifier.py          AI self-verification (4-round dialog)
+  synthesizer.py       Writer (IMRaD paper) + multi-planet tables
+  orchestrator.py      runs all 8 stages + Monte Carlo + plots
+  plots.py             Publication-quality figures
   llm.py               provider client + fallback
 templates/ static/     minimal UI (no neon)
 ```

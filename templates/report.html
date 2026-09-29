@@ -1,51 +1,162 @@
-{% extends "base.html" %}
-{% block title %}{{ r.target or 'report' }} · discovery report{% endblock %}
+﻿{% extends "base.html" %}
+{% block title %}{{ r.target or 'report' }} - VEARTH discovery report{% endblock %}
 {% block content %}
 
 {% if r.error %}
 <div class="panel error">
   <h2>Pipeline failed</h2>
   <pre>{{ r.error }}</pre>
-  <p><a href="/">← back</a></p>
+  <p><a href="/">&#8592; back</a></p>
 </div>
 {% else %}
 
-<div class="breadcrumb"><a href="/">← new run</a></div>
+<div class="breadcrumb"><a href="/">&#8592; new run</a></div>
 
 <h1 class="target-head">{{ r.target }}</h1>
 <div class="tags">
-  <span class="tag">collected {{ r.ingestion.n_points }} pts · {{ r.ingestion.source }}</span>
-  <span class="tag">depth {{ r.analysis.depth_ppm }} ppm</span>
+  <span class="tag">{{ r.ingestion.n_points }} pts from {{ r.ingestion.source }}</span>
+  <span class="tag">{{ r.analysis.depth_ppm }} ppm</span>
   <span class="tag">S/N {{ "%.1f"|format(r.analysis.snr) }}</span>
   <span class="tag">P {{ r.analysis.period_days }} d</span>
   <span class="tag">{{ r.analysis.n_transits }} transits</span>
+  {% if r.multi_planet_results and r.multi_planet_results|length > 1 %}
+  <span class="tag multi">{{ r.multi_planet_results|length }} planets</span>
+  {% endif %}
   <span class="tag veto {{ 'keep' if not r.validation.veto else 'veto' }}">
     {{ 'ADVANCED' if not r.validation.veto else 'VETOED' }}
   </span>
 </div>
 
+{% if r.stellar_info and r.stellar_info.teff %}
 <section class="panel">
-  <h2>Stage 1 · Collector</h2>
-  <p>{{ r.ingestion.n_points }} points from source <code>{{ r.ingestion.source }}</code>.</p>
+  <h2>Stellar Parameters</h2>
+  <table class="metrics">
+    <tr><th>Target</th><td>{{ r.stellar_info.name }}</td></tr>
+    {% if r.stellar_info.teff %}<tr><th>Teff</th><td>{{ r.stellar_info.teff }} K</td></tr>{% endif %}
+    {% if r.stellar_info.radius_rsun %}<tr><th>Radius</th><td>{{ r.stellar_info.radius_rsun }} Rsun</td></tr>{% endif %}
+    {% if r.stellar_info.mass_msun %}<tr><th>Mass</th><td>{{ r.stellar_info.mass_msun }} Msun</td></tr>{% endif %}
+    {% if r.stellar_info.mission_summary and r.stellar_info.mission_summary.available_missions %}
+    <tr><th>Missions</th><td>{{ r.stellar_info.mission_summary.available_missions|join(', ') }}</td></tr>
+    {% endif %}
+  </table>
 </section>
+{% endif %}
+
+{% if r.multi_planet_results and r.multi_planet_results|length > 1 %}
+<section class="panel multi-planet">
+  <h2>Multi-Planet System Detected ({{ r.multi_planet_results|length }} planets)</h2>
+  <table class="metrics">
+    <tr><th>#</th><th>Depth (ppm)</th><th>Period (d)</th><th>S/N</th><th>Radius (Re)</th><th>Teq (K)</th><th>TSM</th><th>Classification</th></tr>
+    {% for p in r.multi_planet_results %}
+    <tr>
+      <td>{{ p.planet_number }}</td>
+      <td>{{ p.analysis.depth_ppm }}</td>
+      <td>{{ p.analysis.period_days }}</td>
+      <td>{{ "%.1f"|format(p.analysis.snr) }}</td>
+      <td>{{ p.physics.planet_radius_rearth }}</td>
+      <td>{{ p.physics.equilibrium_temp_k }}</td>
+      <td>{{ p.physics.tsm }}</td>
+      <td>{{ p.physics.planet_classification }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% if r.plots and r.plots.multi_planet_comparison %}
+    <img class="plot" src="{{ r.plots.multi_planet_comparison }}" alt="multi-planet comparison">
+  {% endif %}
+</section>
+{% endif %}
 
 <section class="panel">
-  <h2>Stage 2-3 · Light curve + Finder</h2>
-  <img class="plot" src="{{ r.plot }}" alt="light curve">
+  <h2>Light Curve</h2>
+  {% if r.plots and r.plots.phase_folded %}
+    <img class="plot" src="{{ r.plots.phase_folded }}" alt="phase folded">
+  {% endif %}
+  {% if r.plots and r.plots.bls_periodogram %}
+    <img class="plot" src="{{ r.plots.bls_periodogram }}" alt="BLS periodogram">
+  {% endif %}
+  {% if r.plots and r.plots.odd_even %}
+    <img class="plot" src="{{ r.plots.odd_even }}" alt="odd even">
+  {% endif %}
+  {% if r.plots and r.plots.residuals %}
+    <img class="plot" src="{{ r.plots.residuals }}" alt="residuals">
+  {% endif %}
   <table class="metrics">
-    <tr><th>dip depth</th><td>{{ r.analysis.depth_ppm }} ppm</td></tr>
-    <tr><th>box-LS S/N</th><td>{{ "%.2f"|format(r.analysis.snr) }}</td></tr>
-    <tr><th>best period</th><td>{{ r.analysis.period_days }} days</td></tr>
-    <tr><th>recurrences</th><td>{{ r.analysis.n_transits }}</td></tr>
-    <tr><th>noise floor</th><td>{{ r.analysis.noise_floor_ppm }} ppm</td></tr>
-    <tr><th>reduced χ² (flat)</th><td>{{ "%.5f"|format(r.analysis.reduced_chi2) }}</td></tr>
-    <tr><th>IsolationForest outliers</th><td>{{ r.analysis.outlier_indices|length }}</td></tr>
+    <tr><th>Dip depth</th><td>{{ r.analysis.depth_ppm }} ppm</td></tr>
+    <tr><th>BLS S/N</th><td>{{ "%.2f"|format(r.analysis.snr) }}</td></tr>
+    <tr><th>Best period</th><td>{{ r.analysis.period_days }} days</td></tr>
+    <tr><th>Recurrences</th><td>{{ r.analysis.n_transits }}</td></tr>
+    <tr><th>Noise floor</th><td>{{ r.analysis.noise_floor_ppm }} ppm</td></tr>
+    <tr><th>Reduced chi2</th><td>{{ "%.5f"|format(r.analysis.reduced_chi2) }}</td></tr>
+  </table>
+</section>
+
+{% if r.physics %}
+<section class="panel">
+  <h2>Planet Characterization</h2>
+  <table class="metrics">
+    <tr><th>Planet radius</th><td>{{ r.physics.planet_radius_rearth }} Re ({{ r.physics.planet_radius_rjup }} Rj)</td></tr>
+    <tr><th>Estimated mass</th><td>{{ r.physics.estimated_mass_earth }} Me ({{ r.physics.estimated_mass_jup }} Mj)</td></tr>
+    <tr><th>Bulk density</th><td>{{ r.physics.bulk_density_gcm3 }} g/cm3</td></tr>
+    <tr><th>Semi-major axis</th><td>{{ r.physics.semi_major_axis_au }} AU</td></tr>
+    <tr><th>Equilibrium temp</th><td>{{ r.physics.equilibrium_temp_k }} K</td></tr>
+    <tr><th>Eccentricity</th><td>{{ r.physics.eccentricity_min }} - {{ r.physics.eccentricity_max }}</td></tr>
+    <tr><th>Classification</th><td>{{ r.physics.planet_classification }}</td></tr>
+    <tr><th>Habitable zone</th><td>{{ 'Yes' if r.physics.in_habitable_zone else 'No' }}</td></tr>
+    <tr><th>Transit duration</th><td>{{ r.physics.transit_duration_hours }} hours</td></tr>
+    <tr><th>Transit probability</th><td>{{ r.physics.transit_probability.in_percent }}%</td></tr>
   </table>
 </section>
 
 <section class="panel">
-  <h2>Stage 4 · Critic &nbsp;<span class="conf">{{ r.validation.confidence }}</span>
-    &nbsp;<small>· {{ r.validation.llm_source }}</small></h2>
+  <h2>Atmospheric Characterization (JWST)</h2>
+  <table class="metrics">
+    <tr><th>Transmission (TSM)</th><td class="{{ 'keep' if r.physics.tsm > 30 else 'veto' }}">{{ r.physics.tsm }} — {{ r.physics.tsm_tier }}</td></tr>
+    <tr><th>Emission (ESM)</th><td class="{{ 'keep' if r.physics.esm > 3 else 'veto' }}">{{ r.physics.esm }} — {{ r.physics.esm_tier }}</td></tr>
+    <tr><th>Scale height</th><td>{{ r.physics.tsm_scale_height_m }} m</td></tr>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>Orbital Dynamics</h2>
+  <table class="metrics">
+    <tr><th>Hill stability</th><td class="{{ 'keep' if r.physics.hill_stability.classification == 'stable' else 'warn' }}">{{ r.physics.hill_stability.classification }} (R_Hill = {{ r.physics.hill_stability.hill_radius_rearth }} Re)</td></tr>
+    <tr><th>Tidal locking</th><td>{{ r.physics.tidal_locking.assessment }} ({{ r.physics.tidal_locking.timescale_gyr }} Gyr)</td></tr>
+    <tr><th>Geometric probability</th><td>{{ r.physics.transit_probability.geometric_probability * 100 }}%</td></tr>
+  </table>
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>Verification Tests</h2>
+  {% if r.validation.verification_tests %}
+    <p><b>{{ r.validation.verification_tests.passed_count }}/{{ r.validation.verification_tests.total_tests }} tests passed</b> (avg score: {{ r.validation.verification_tests.average_score }})</p>
+    <table class="metrics">
+      <tr><th>Test</th><th>Status</th><th>Details</th></tr>
+      {% for t in r.validation.verification_tests.tests %}
+      <tr>
+        <td>{{ t.test_name }}</td>
+        <td class="{{ 'keep' if t.passed else 'veto' }}">{{ 'PASS' if t.passed else 'FAIL' }}</td>
+        <td>{{ t.details[:120] }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Self-Verification (AI Dialog)</h2>
+  {% if r.self_verification %}
+    <p><b>Verdict:</b> {{ r.self_verification.final_verdict }} (confidence: {{ r.self_verification.confidence }}%)</p>
+    <p>{{ r.self_verification.summary[:500] }}</p>
+    <p><b>Next steps:</b> {{ r.self_verification.next_steps }}</p>
+    {% if r.self_verification.habitability_assessment %}
+    <p><b>Habitability:</b> {{ r.self_verification.habitability_assessment }}</p>
+    {% endif %}
+    {% if r.self_verification.jwst_recommended %}
+    <p><b>JWST Recommendation:</b> {{ r.self_verification.jwst_recommended }}</p>
+    {% endif %}
+  {% endif %}
+  <h3>Critic Analysis</h3>
   <p class="hyp"><b>Hypothesis:</b> {{ r.validation.hypothesis }}</p>
   {% if r.validation.self_questions %}
   <div class="qa">
@@ -58,27 +169,48 @@
           {{ 'confirmed' if sq.resolved_true_or_false else 'rejected' }}
         </span>
       </div>
-      {% else %}
-      <div class="q"><span class="qmark">Q</span>{{ sq }}</div>
       {% endif %}
     {% endfor %}
   </div>
-  {% endif %}
-  {% if r.validation.rag_refs %}
-  <p class="refshead">Retrieved literature (RAG):</p>
-  <ul class="refs">
-    {% for ref in r.validation.rag_refs %}
-      <li>[{{ ref.id }}] &nbsp;score {{ ref.score }}</li>
-    {% endfor %}
-  </ul>
   {% endif %}
   <p class="vreason {{ 'keep' if not r.validation.veto else 'veto' }}">
     <b>Ruling:</b> {{ r.validation.reason }}
   </p>
 </section>
 
+{% if r.known_planets %}
+<section class="panel">
+  <h2>Known Planets Nearby</h2>
+  <table class="metrics">
+    <tr><th>Name</th><th>Period (d)</th><th>Radius (Re)</th><th>Method</th></tr>
+    {% for p in r.known_planets[:10] %}
+    <tr>
+      <td>{{ p.pl_name }}</td>
+      <td>{{ p.pl_orbper }}</td>
+      <td>{{ p.pl_rade }}</td>
+      <td>{{ p.discoverymethod }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</section>
+{% endif %}
+
+{% if r.monte_carlo and r.monte_carlo.iterations > 50 %}
+<section class="panel">
+  <h2>Monte Carlo Uncertainty Propagation ({{ r.monte_carlo.iterations }} iterations)</h2>
+  <table class="metrics">
+    <tr><th>Parameter</th><th>Mean</th><th>Std Dev</th><th>1-Sigma Range</th></tr>
+    <tr><th>Period (d)</th><td>{{ r.monte_carlo.period_mean }}</td><td>{{ r.monte_carlo.period_std }}</td><td>{{ r.monte_carlo.period_1sigma[0] }} — {{ r.monte_carlo.period_1sigma[1] }}</td></tr>
+    <tr><th>Depth (ppm)</th><td>{{ r.monte_carlo.depth_mean }}</td><td>{{ r.monte_carlo.depth_std }}</td><td>{{ r.monte_carlo.depth_1sigma[0] }} — {{ r.monte_carlo.depth_1sigma[1] }}</td></tr>
+  </table>
+  {% if r.plots and r.plots.mc_distributions %}
+    <img class="plot" src="{{ r.plots.mc_distributions }}" alt="Monte Carlo distributions">
+  {% endif %}
+</section>
+{% endif %}
+
 <section class="panel paper">
-  <h2>Stage 5 · Research paper <span class="small">({{ r.paper.source }})</span></h2>
+  <h2>Research Paper <span class="small">({{ r.paper.source }})</span></h2>
   <div class="paperbody">
     {{ r.paper.markdown|md }}
   </div>

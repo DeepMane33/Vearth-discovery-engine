@@ -1,62 +1,88 @@
-"""Hypothesis & Validation Agent (The Critic).
+"""Hypothesis & Validation Agent (The Critic) - Professional Grade.
 
-When the Analyzer flags an anomaly, this agent:
-  1. drafts a scientific hypothesis
-  2. retrieves relevant prior literature from the Vector DB (RAG)
-  3. self-questions the hypothesis from multiple angles
-  4. cross-checks each doubt against the retrieved literature
-  5. decides whether to VETO the anomaly or ADVANCE it as a candidate
+Runs the 10-test verification battery, cross-catalog matching,
+and AI self-questioning to produce a rigorous validation verdict.
 """
 import json
-from engine import llm, vectorstore
+import numpy as np
+from engine import llm, vectorstore, validation_tests
 
 
 SYSTEM = (
-    "You are a rigorous astrophysicist peer reviewer. You NEVER overclaim. "
-    "Given a light-curve anomaly and retrieved prior literature, you: "
-    "(a) state one primary hypothesis, (b) enumerate skeptical self-"
-    "questions attacking it from every angle (instrumental, astrophysical, "
-    "statistical), (c) answer each using ONLY the literature provided and "
-    "basic physics, (d) give a final ruling. Respond ONLY as compact JSON "
-    "with keys: hypothesis, self_questions (list of {question, answer, "
-    "resolved_true_or_false}), confidence (low|medium|high), veto (bool), "
-    "reason."
+    "You are a rigorous astrophysics peer reviewer at a top journal. "
+    "You NEVER overclaim. Given a transit detection, its verification test "
+    "results, and retrieved prior literature, you MUST: "
+    "(a) state one primary hypothesis, "
+    "(b) enumerate skeptical self-questions attacking it from every angle "
+    "(instrumental, astrophysical, statistical, catalog), "
+    "(c) answer each using ONLY the provided evidence and basic physics, "
+    "(d) give a final ruling. "
+    "Respond ONLY as compact JSON with keys: hypothesis, self_questions "
+    "(list of {question, answer, resolved_true_or_false}), confidence "
+    "(low|medium|high), veto (bool), reason. "
+    "CRITICAL: If the catalog cross-match found a match, you MUST veto "
+    "and state it is a KNOWN PLANET, not a new discovery."
 )
 
 
-def validate(analysis, target):
+def validate(analysis, target, time_arr=None, flux_arr=None, known_planets=None):
     transit = analysis.get("transit", {})
     depth = analysis.get("depth_ppm", 0)
     snr = analysis.get("snr", 0.0)
-    n_tr = analysis.get("n_transits", 0)
+    n_tr = transit.get("n_transits", 0)
     period = analysis.get("period_days")
     rp_rearth = analysis.get("planet_radius_rearth")
     r_star = analysis.get("stellar_radius_rsun")
 
+    test_results = validation_tests.run_all_tests(
+        time_arr if time_arr is not None else np.array([]),
+        flux_arr if flux_arr is not None else np.array([]),
+        analysis,
+        known_planets=known_planets,
+    )
+
+    rag = vectorstore.query(
+        f"transit dip depth {depth}ppm period {period} days false positive "
+        f"eclipsing binary contamination systematic s/n {snr:.1f}", k=5)
+
+    test_summary = "\n".join(
+        f"  [{t['test_name']}] {'PASS' if t['passed'] else 'FAIL'}: {t['details']}"
+        for t in test_results["tests"]
+    )
+
     evidence = (
-        f"Target: {target}\n"
-        f"Detected dip depth: {depth} ppm\n"
-        f"Transit S/N (box least squares): {snr:.2f}\n"
-        f"Best-fit period: {period} days\n"
-        f"Number of transits recurring at fixed phase: {n_tr}\n"
-        f"Reduced chi-squared of flat model: {analysis.get('reduced_chi2', 0):.5f}\n"
-        f"Noise floor: {analysis.get('noise_floor_ppm', 0)} ppm\n"
+        f"TARGET: {target}\n"
+        f"DETECTED SIGNAL:\n"
+        f"  Depth: {depth} ppm\n"
+        f"  S/N: {snr:.2f}\n"
+        f"  Period: {period} days\n"
+        f"  Recurrences: {n_tr}\n"
+        f"  Noise floor: {analysis.get('noise_floor_ppm', 0)} ppm\n\n"
+        f"VERIFICATION TESTS ({test_results['passed_count']}/{test_results['total_tests']} passed):\n"
+        f"{test_summary}\n\n"
+        f"CATALOG CROSS-MATCH:\n"
     )
     if rp_rearth:
         evidence += f"Planet radius (from Gaia stellar params): {rp_rearth:.2f} R⊕\n"
     if r_star:
         evidence += f"Stellar radius: {r_star:.3f} R☉\n"
 
-    rag = vectorstore.query(
-        f"transit dip depth {depth}ppm period {period} days false positive "
-        f"eclipsing binary contamination systematic s/n {snr:.1f}", k=5)
+    if known_planets:
+        if len(known_planets) > 0:
+            names = [p.get("pl_name", "unknown") for p in known_planets[:5]]
+            evidence += f"  KNOWN PLANETS NEARBY: {', '.join(names)}\n"
+        else:
+            evidence += "  No matching known planets found.\n"
+    else:
+        evidence += "  Catalog data not available.\n"
+
     context = "\n\n--- PRIOR LITERATURE ---\n" + "\n".join(
         f"[{r['id']} score={r['score']:.3f}] {r['text']}" for r in rag)
 
     user = ("LIGHT-CURVE EVIDENCE:\n" + evidence + context +
             "\n\nApply full skeptical vetting. Output JSON only.")
 
-    result = llm.ask_llm(SYSTEM, user, temperature=0.2, max_tokens=1600)
+    result = llm.ask_llm(SYSTEM, user, temperature=0.2, max_tokens=2000)
     parsed = llm.extract_json(result["text"])
 
     parsed.setdefault("hypothesis", "")
@@ -66,27 +92,29 @@ def validate(analysis, target):
     parsed.setdefault("reason", "")
 
     if result["source"] == "fallback":
-        veto = _rule_veto(snr, n_tr, depth, rp_rearth)
+        veto = _rule_veto(snr, n_tr, depth, test_results, rp_rearth)
         parsed["veto"] = veto
-        parsed["hypothesis"] = _fallback_hypothesis(snr, n_tr, depth, period, rp_rearth)
+        parsed["hypothesis"] = _fallback_hypothesis(snr, n_tr, depth, period, test_results, rp_rearth)
         parsed["self_questions"] = _fallback_questions(
-            snr, n_tr, depth, period, analysis, rag, rp_rearth, r_star)
-        parsed["confidence"] = _fallback_confidence(snr, n_tr, rp_rearth)
-        parsed["reason"] = ("rule-based veto: insufficient S/N or recurrence"
+            snr, n_tr, depth, period, analysis, rag, test_results, known_planets, rp_rearth)
+        parsed["confidence"] = _fallback_confidence(snr, n_tr, test_results, rp_rearth)
+        parsed["reason"] = ("rule-based veto: failed verification tests or implausible radius"
                             if veto else
-                            "rule-based advance: recurring dip clears basic vetting")
+                            "rule-based advance: signal passes verification battery and radius vetting")
 
-    parsed["rag_refs"] = [{"id": r["id"], "score": round(r["score"], 3)}
-                          for r in rag]
+    parsed["rag_refs"] = [{"id": r["id"], "score": round(r["score"], 3)} for r in rag]
     parsed["llm_source"] = result["source"]
     parsed["raw"] = result["text"]
+    parsed["verification_tests"] = test_results
     return parsed
 
 
-def _rule_veto(snr, n_tr, depth, rp_rearth=None):
-    if n_tr < 2:
+def _rule_veto(snr, n_tr, depth, test_results, rp_rearth=None):
+    if test_results.get("passed_count", 0) < 5:
         return True
     if snr < 7.0:
+        return True
+    if n_tr < 3:
         return True
     if depth < 50 or depth > 50000:
         return True
@@ -95,69 +123,123 @@ def _rule_veto(snr, n_tr, depth, rp_rearth=None):
     return False
 
 
-def _fallback_confidence(snr, n_tr, rp_rearth=None):
-    if snr >= 12 and n_tr >= 3 and (rp_rearth is None or rp_rearth < 20):
+def _fallback_confidence(snr, n_tr, test_results, rp_rearth=None):
+    passed = test_results.get("passed_count", 0)
+    total = test_results.get("total_tests", 10)
+    ratio = passed / total if total > 0 else 0
+
+    if rp_rearth and rp_rearth > 25:
+        return "low"
+    if snr >= 12 and n_tr >= 3 and ratio >= 0.8 and (rp_rearth is None or rp_rearth < 20):
         return "high"
-    if snr >= 7 and n_tr >= 2 and (rp_rearth is None or rp_rearth < 25):
+    if snr >= 7 and n_tr >= 2 and ratio >= 0.6 and (rp_rearth is None or rp_rearth < 25):
         return "medium"
     return "low"
 
 
-def _fallback_hypothesis(snr, n_tr, depth, period, rp_rearth=None):
-    if snr < 7 or n_tr < 2:
-        return ("The shallow dip lacks the signal-to-noise and recurrence "
-                "required for a confident transit detection; it is more "
-                "consistent with residual instrumental noise or stellar "
-                "variability than with a transiting companion.")
+def _fallback_hypothesis(snr, n_tr, depth, period, test_results, rp_rearth=None):
+    passed = test_results.get("passed_count", 0)
+    total = test_results.get("total_tests", 10)
+
+    if snr < 7 or n_tr < 3:
+        return (
+            f"The signal (S/N={snr:.1f}, {n_tr} recurrences) lacks the "
+            f"statistical significance required for a confident transit "
+            f"detection. It is more consistent with residual noise or "
+            f"stellar variability."
+        )
+    if passed < total * 0.6:
+        return (
+            f"The {depth} ppm dip at {period} d shows some transit-like "
+            f"properties but fails {total - passed}/{total} verification "
+            f"tests. The signal requires additional vetting before "
+            f"classification."
+        )
     rp_str = f" (~{rp_rearth:.1f} R⊕)" if rp_rearth else ""
-    return (f"The {depth} ppm dip repeating every {period} d over "
-            f"{n_tr} recurrences is consistent with a single-body transit "
-            f"by a {rp_str} companion, pending false-positive "
-            f"vetting (centroid, odd-even, secondary eclipse).")
+    radius_note = ""
+    if rp_rearth and rp_rearth > 25:
+        radius_note = (f" However, the inferred radius of {rp_rearth:.1f} R⊕ "
+                       f"exceeds the ~20 R⊕ brown dwarf/stellar boundary — "
+                       f"this is likely a low-mass star, not a planet.")
+    return (
+        f"The {depth} ppm dip repeating every {period} d over {n_tr} "
+        f"recurrences passes {passed}/{total} verification tests. "
+        f"This is consistent with a transiting{rp_str} companion, "
+        f"pending false-positive vetting (centroid, odd-even, secondary "
+        f"eclipse).{radius_note}"
+    )
 
 
-def _fallback_questions(snr, n_tr, depth, period, analysis, rag, rp_rearth=None, r_star=None):
+def _fallback_questions(snr, n_tr, depth, period, analysis, rag, test_results, known_planets, rp_rearth=None):
     ids = [r["id"] for r in rag[:3]]
     qs = []
-    qs.append({"question": "Is the signal real or a single-point outlier?",
-               "answer": f"{n_tr} transits recur at fixed phase; a single "
-                         f"cosmic-ray/hot pixel cannot explain periodicity, "
-                         f"so the signal is not a lone outlier per "
-                         f"{ids[0] if ids else 'noise lit'}.",
-              "resolved_true_or_false": n_tr >= 2})
-    qs.append({"question": "Could the dip be a detector systematic / roll?",
-               "answer": "The best period is non-instrumental unless it "
-                         "matches the TESS roll cadence (~13.7 d); here it "
-                         f"is {period} d, so instrument roll is unlikely.",
-              "resolved_true_or_false": not (period and abs(period - 13.7) < 0.5)})
-    qs.append({"question": "Might it be a blended/background eclipsing binary?",
-               "answer": "Depth is {} ppm — consistent with a small planet or "
-                         "a diluted binary; centroid-offset data is required "
-                         "to settle this per the contamination reference.".format(depth),
-              "resolved_true_or_false": depth < 20000})
-    qs.append({"question": "Is S/N statistically significant?",
-               "answer": f"Box-LS S/N = {snr:.2f}; the standard planet threshold "
-                         f"is ~7. This {'passes' if snr >= 7 else 'fails'} that bar.",
-              "resolved_true_or_false": snr >= 7})
-    qs.append({"question": "Could stellar variability mimic the dip?",
-               "answer": "Starspots/flares are quasi-periodic or aperiodic and "
-                         "do not produce a clean phase-locked box transit "
-                         "repeating over many orbits.",
-              "resolved_true_or_false": n_tr >= 3})
+
+    qs.append({
+        "question": "Is this signal already in the NASA Exoplanet Archive?",
+        "answer": (
+            f"Catalog cross-match: {test_results['tests'][-1]['details']}"
+            if test_results["tests"][-1]["test_name"] == "Catalog Cross-match"
+            else "Catalog data not checked."
+        ),
+        "resolved_true_or_false": test_results["tests"][-1].get("passed", True)
+            if test_results["tests"][-1]["test_name"] == "Catalog Cross-match" else True,
+    })
+
+    qs.append({
+        "question": "Is the signal-to-noise ratio sufficient for a real detection?",
+        "answer": f"S/N = {snr:.2f}. Professional threshold is 7.0. This {'passes' if snr >= 7 else 'fails'} that bar.",
+        "resolved_true_or_false": snr >= 7,
+    })
+
+    qs.append({
+        "question": "Do multiple transits recur at the same orbital phase?",
+        "answer": f"{n_tr} transits found recurring at fixed phase. A single dip cannot explain periodicity.",
+        "resolved_true_or_false": n_tr >= 3,
+    })
+
+    qs.append({
+        "question": "Could the dip be from an eclipsing binary rather than a planet?",
+        "answer": (
+            f"Odd-even test: {test_results['tests'][3]['details']} "
+            f"Secondary eclipse: {test_results['tests'][4]['details']} "
+            f"V-shape: {test_results['tests'][5]['details']}"
+        ),
+        "resolved_true_or_false": all(
+            t["passed"] for t in test_results["tests"][3:6]
+        ),
+    })
+
+    qs.append({
+        "question": "Is the signal a noise artifact or stellar variability?",
+        "answer": (
+            f"Bootstrap FAP: {test_results['tests'][6]['details']} "
+            f"Stellar variability: {test_results['tests'][7]['details']}"
+        ),
+        "resolved_true_or_false": test_results["tests"][6].get("passed", True)
+            and test_results["tests"][7].get("passed", True),
+    })
+
     if rp_rearth:
         if rp_rearth > 25:
-            qs.append({"question": "Is the inferred radius physically plausible for a planet?",
-                       "answer": f"Radius {rp_rearth:.1f} R⊕ exceeds the ~20 R⊕ brown dwarf/stellar boundary. "
-                                 f"This is likely a low-mass star or brown dwarf, not a planet.",
-                       "resolved_true_or_false": False})
+            qs.append({
+                "question": "Is the inferred radius physically plausible for a planet?",
+                "answer": f"Radius {rp_rearth:.1f} R⊕ exceeds the ~20 R⊕ brown dwarf/stellar boundary. "
+                          f"This is likely a low-mass star or brown dwarf, not a planet.",
+                "resolved_true_or_false": False,
+            })
         elif rp_rearth > 15:
-            qs.append({"question": "Is the inferred radius physically plausible for a planet?",
-                       "answer": f"Radius {rp_rearth:.1f} R⊕ is in the transition zone between giant planets "
-                                 f"and brown dwarfs; mass measurement required for confirmation.",
-                       "resolved_true_or_false": None})
+            qs.append({
+                "question": "Is the inferred radius physically plausible for a planet?",
+                "answer": f"Radius {rp_rearth:.1f} R⊕ is in the transition zone between giant planets "
+                          f"and brown dwarfs; mass measurement required for confirmation.",
+                "resolved_true_or_false": None,
+            })
         else:
-            qs.append({"question": "Is the inferred radius physically plausible for a planet?",
-                       "answer": f"Radius {rp_rearth:.1f} R⊕ is consistent with a planet "
-                                 f"(super-Earth to Jupiter-size).",
-                       "resolved_true_or_false": True})
+            qs.append({
+                "question": "Is the inferred radius physically plausible for a planet?",
+                "answer": f"Radius {rp_rearth:.1f} R⊕ is consistent with a planet "
+                          f"(super-Earth to Jupiter-size).",
+                "resolved_true_or_false": True,
+            })
+
     return qs

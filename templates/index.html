@@ -1,15 +1,16 @@
 {% extends "base.html" %}
-{% block title %}Discovery Engine · run{% endblock %}
+{% block title %}VEARTH Engine v3.0{% endblock %}
 {% block content %}
 <section class="hero">
-  <h1>Autonomous Discovery Engine</h1>
-  <p>Five agents ingest satellite data, search for anomalies, validate them
-  against the literature, then draft a research paper. Pick a target or enter
+  <h1>VEARTH Engine v3.0</h1>
+  <p>Autonomous exoplanet discovery pipeline with 17-test verification,
+  multi-planet detection, atmospheric characterization metrics, and
+  Monte Carlo uncertainty propagation. Pick a target or enter
   your own TIC / TOI / star name.</p>
 </section>
 
 <section class="panel">
-  <form id="runForm" action="/run" method="post">
+  <form id="runForm">
     <label for="target">Target identifier</label>
     <input id="target" name="target" list="known" placeholder="e.g. TIC 268684168"
            value="{{ targets[0] }}" required autocomplete="off">
@@ -20,32 +21,225 @@
   </form>
 </section>
 
+<section id="progressPanel" class="panel progress-panel hidden">
+  <h2>Pipeline Progress</h2>
+  <div id="progressLog" class="progress-log"></div>
+  <div class="progress-stages" id="progressStages">
+    <div class="stage" data-stage="collect">
+      <span class="stage-icon" id="icon-collect">&#9675;</span>
+      <span class="stage-label">Collect</span>
+      <span class="stage-msg" id="msg-collect"></span>
+    </div>
+    <div class="stage" data-stage="crossmatch">
+      <span class="stage-icon" id="icon-crossmatch">&#9675;</span>
+      <span class="stage-label">Cross-match</span>
+      <span class="stage-msg" id="msg-crossmatch"></span>
+    </div>
+    <div class="stage" data-stage="analyze">
+      <span class="stage-icon" id="icon-analyze">&#9675;</span>
+      <span class="stage-label">Analyze</span>
+      <span class="stage-msg" id="msg-analyze"></span>
+    </div>
+    <div class="stage" data-stage="physics">
+      <span class="stage-icon" id="icon-physics">&#9675;</span>
+      <span class="stage-label">Physics</span>
+      <span class="stage-msg" id="msg-physics"></span>
+    </div>
+    <div class="stage" data-stage="montecarlo">
+      <span class="stage-icon" id="icon-montecarlo">&#9675;</span>
+      <span class="stage-label">Monte Carlo</span>
+      <span class="stage-msg" id="msg-montecarlo"></span>
+    </div>
+    <div class="stage" data-stage="validate">
+      <span class="stage-icon" id="icon-validate">&#9675;</span>
+      <span class="stage-label">Validate (17 tests)</span>
+      <span class="stage-msg" id="msg-validate"></span>
+    </div>
+    <div class="stage" data-stage="verify">
+      <span class="stage-icon" id="icon-verify">&#9675;</span>
+      <span class="stage-label">AI Self-verify</span>
+      <span class="stage-msg" id="msg-verify"></span>
+    </div>
+    <div class="stage" data-stage="plot">
+      <span class="stage-icon" id="icon-plot">&#9675;</span>
+      <span class="stage-label">Plot</span>
+      <span class="stage-msg" id="msg-plot"></span>
+    </div>
+    <div class="stage" data-stage="synthesize">
+      <span class="stage-icon" id="icon-synthesize">&#9675;</span>
+      <span class="stage-label">Synthesize</span>
+      <span class="stage-msg" id="msg-synthesize"></span>
+    </div>
+    <div class="stage" data-stage="done">
+      <span class="stage-icon" id="icon-done">&#9675;</span>
+      <span class="stage-label">Done</span>
+      <span class="stage-msg" id="msg-done"></span>
+    </div>
+  </div>
+  <p class="progress-timer" id="progressTimer">Elapsed: 0s</p>
+</section>
+
 <details class="explain">
-  <summary>What the pipeline does</summary>
+  <summary>What the pipeline does (v3.0)</summary>
   <ol>
-    <li><b>Collector</b> — pulls the TESS light curve from MAST (astroquery), cached locally. Falls back to a synthetic curve offline.</li>
+    <li><b>Collector</b> — pulls the TESS light curve from MAST (astroquery), cached locally. Also queries Gaia DR3, TIC, and Kepler/K2 for multi-mission data.</li>
     <li><b>Memory</b> — a vector store of prior literature for retrieval (RAG).</li>
-    <li><b>Finder</b> — detrend + box-least-squares transit search + IsolationForest outlier flag.</li>
+    <li><b>Finder</b> — detrend + box-least-squares transit search + IsolationForest outlier flag. Sequentially detects up to 5 planets.</li>
+    <li><b>Validator</b> — 17-test verification battery including phase curve, chromaticity, harmonic alias, transit shape, window function, and stellar density consistency.</li>
     <li><b>Critic</b> — LLM drafts a hypothesis, self-questions it attack-by-attack, vetoes or advances.</li>
-    <li><b>Writer</b> — drafts an IMRaD report citing the exact data logs.</li>
+    <li><b>Verifier</b> — 4-round AI self-verification with physics evidence (atmospheric metrics, orbital stability, mass-radius).</li>
+    <li><b>Writer</b> — drafts an IMRaD report with multi-planet comparison, Monte Carlo uncertainties, and JWST characterization metrics.</li>
   </ol>
 </details>
-
-<div id="loader" class="loader hidden">
-  <div class="bar"><span></span></div>
-  <p>running the 5 agents. TESS download + LLM reasoning can take 30–90 s.</p>
-</div>
 
 {% endblock %}
 
 {% block extra_js %}
 <script>
-const f = document.getElementById('runForm');
-const btn = document.getElementById('goBtn');
-const loader = document.getElementById('loader');
-f.addEventListener('submit', () => {
-  btn.disabled = true; btn.textContent = 'running…';
-  loader.classList.remove('hidden');
-});
+(() => {
+  const f = document.getElementById('runForm');
+  const btn = document.getElementById('goBtn');
+  const panel = document.getElementById('progressPanel');
+  const log = document.getElementById('progressLog');
+  const timer = document.getElementById('progressTimer');
+  let startTime = 0;
+  let timerInterval = null;
+  const completedStages = new Set();
+  const stageOrder = ['collect','crossmatch','analyze','physics','montecarlo','validate','verify','plot','synthesize','done'];
+
+  function updateTimer() {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const m = Math.floor(elapsed / 60);
+    const s = elapsed % 60;
+    timer.textContent = `Elapsed: ${m > 0 ? m + 'm ' : ''}${s}s`;
+  }
+
+  function markStage(name, status) {
+    const icon = document.getElementById('icon-' + name);
+    if (!icon) return;
+    if (status === 'active') {
+      icon.textContent = '\u25CB';
+      icon.className = 'stage-icon active';
+    } else if (status === 'done') {
+      icon.textContent = '\u2713';
+      icon.className = 'stage-icon done';
+    } else if (status === 'error') {
+      icon.textContent = '\u2717';
+      icon.className = 'stage-icon error';
+    }
+  }
+
+  function addLog(msg) {
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    const now = new Date().toLocaleTimeString();
+    line.innerHTML = '<span class="log-time">[' + now + ']</span> ' + msg;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  f.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const target = document.getElementById('target').value.trim();
+    if (!target) return;
+
+    btn.disabled = true;
+    btn.textContent = 'Running...';
+    panel.classList.remove('hidden');
+    log.innerHTML = '';
+    completedStages.clear();
+    stageOrder.forEach(s => {
+      markStage(s, '');
+      const msgEl = document.getElementById('msg-' + s);
+      if (msgEl) msgEl.textContent = '';
+    });
+
+    startTime = Date.now();
+    timerInterval = setInterval(updateTimer, 500);
+    updateTimer();
+
+    addLog('Starting pipeline for <b>' + target + '</b>');
+
+    fetch('/api/run_stream', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({target: target})
+    }).then(response => {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      function read() {
+        reader.read().then(({done, value}) => {
+          if (done) {
+            clearInterval(timerInterval);
+            btn.disabled = false;
+            btn.textContent = 'Run discovery pipeline';
+            return;
+          }
+          buffer += decoder.decode(value, {stream: true});
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const event = JSON.parse(line.slice(6));
+              handleEvent(event);
+            } catch(e) {}
+          }
+          read();
+        });
+      }
+      read();
+    }).catch(err => {
+      addLog('<span style="color:var(--bad)">Connection error: ' + err.message + '</span>');
+      clearInterval(timerInterval);
+      btn.disabled = false;
+      btn.textContent = 'Run discovery pipeline';
+    });
+  });
+
+  function handleEvent(event) {
+    if (event.type === 'progress') {
+      const stage = event.stage;
+      if (stage === 'start') {
+        addLog(event.message);
+        return;
+      }
+      if (stage === 'done') {
+        addLog('<b style="color:var(--good)">' + event.message + '</b>');
+        markStage('done', 'done');
+        return;
+      }
+      for (const s of stageOrder) {
+        if (!completedStages.has(s) && s !== stage) break;
+        if (s === stage) break;
+      }
+      if (!completedStages.has(stage)) {
+        for (const s of stageOrder) {
+          if (!completedStages.has(s) && s !== stage) {
+            markStage(s, 'done');
+            completedStages.add(s);
+            break;
+          }
+        }
+      }
+      markStage(stage, 'active');
+      const msgEl = document.getElementById('msg-' + stage);
+      if (msgEl) msgEl.textContent = event.message;
+      addLog('<span class="log-stage">[' + stage.toUpperCase() + ']</span> ' + event.message);
+    } else if (event.type === 'result') {
+      stageOrder.forEach(s => markStage(s, 'done'));
+      clearInterval(timerInterval);
+      addLog('<b style="color:var(--good)">Report ready! Redirecting...</b>');
+      setTimeout(() => { window.location.href = event.redirect; }, 800);
+    } else if (event.type === 'error') {
+      clearInterval(timerInterval);
+      addLog('<span style="color:var(--bad)"><b>ERROR:</b> ' + event.message + '</span>');
+      btn.disabled = false;
+      btn.textContent = 'Run discovery pipeline';
+    }
+  }
+})();
 </script>
 {% endblock %}
