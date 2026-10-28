@@ -139,7 +139,7 @@ def api_run_stream():
     def _generate():
         while True:
             try:
-                event = q.get(timeout=120)
+                event = q.get(timeout=300)
             except queue.Empty:
                 yield f"data: {json.dumps({'type': 'timeout'})}\n\n"
                 break

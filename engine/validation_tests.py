@@ -1,4 +1,4 @@
-﻿"""Validation Tests Module - Fixed.
+"""Validation Tests Module - Fixed.
 
 All flux-dependent tests normalize flux to median=1.0 before computing depths.
 """

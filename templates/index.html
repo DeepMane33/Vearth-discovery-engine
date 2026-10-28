@@ -3,7 +3,7 @@
 {% block content %}
 <section class="hero">
   <h1>VEARTH Engine v3.0</h1>
-  <p>Autonomous exoplanet discovery pipeline with 17-test verification,
+  <p>Autonomous exoplanet discovery pipeline with 15-test verification,
   multi-planet detection, atmospheric characterization metrics, and
   Monte Carlo uncertainty propagation. Pick a target or enter
   your own TIC / TOI / star name.</p>
@@ -52,7 +52,7 @@
     </div>
     <div class="stage" data-stage="validate">
       <span class="stage-icon" id="icon-validate">&#9675;</span>
-      <span class="stage-label">Validate (17 tests)</span>
+      <span class="stage-label">Validate (15 tests)</span>
       <span class="stage-msg" id="msg-validate"></span>
     </div>
     <div class="stage" data-stage="verify">
@@ -82,13 +82,13 @@
 <details class="explain">
   <summary>What the pipeline does (v3.0)</summary>
   <ol>
-    <li><b>Collector</b> — pulls the TESS light curve from MAST (astroquery), cached locally. Also queries Gaia DR3, TIC, and Kepler/K2 for multi-mission data.</li>
-    <li><b>Memory</b> — a vector store of prior literature for retrieval (RAG).</li>
-    <li><b>Finder</b> — detrend + box-least-squares transit search + IsolationForest outlier flag. Sequentially detects up to 5 planets.</li>
-    <li><b>Validator</b> — 17-test verification battery including phase curve, chromaticity, harmonic alias, transit shape, window function, and stellar density consistency.</li>
-    <li><b>Critic</b> — LLM drafts a hypothesis, self-questions it attack-by-attack, vetoes or advances.</li>
-    <li><b>Verifier</b> — 4-round AI self-verification with physics evidence (atmospheric metrics, orbital stability, mass-radius).</li>
-    <li><b>Writer</b> — drafts an IMRaD report with multi-planet comparison, Monte Carlo uncertainties, and JWST characterization metrics.</li>
+    <li><b>Collector</b> â€” pulls the TESS light curve from MAST (astroquery), cached locally. Also queries Gaia DR3, TIC, and Kepler/K2 for multi-mission data.</li>
+    <li><b>Memory</b> â€” a vector store of prior literature for retrieval (RAG).</li>
+    <li><b>Finder</b> â€” detrend + box-least-squares transit search + IsolationForest outlier flag. Sequentially detects up to 5 planets.</li>
+    <li><b>Validator</b> â€” 15-test verification battery including phase curve, chromaticity, harmonic alias, transit shape, window function, and stellar density consistency.</li>
+    <li><b>Critic</b> â€” LLM drafts a hypothesis, self-questions it attack-by-attack, vetoes or advances.</li>
+    <li><b>Verifier</b> â€” 4-round AI self-verification with physics evidence (atmospheric metrics, orbital stability, mass-radius).</li>
+    <li><b>Writer</b> â€” drafts an IMRaD report with multi-planet comparison, Monte Carlo uncertainties, and JWST characterization metrics.</li>
   </ol>
 </details>
 

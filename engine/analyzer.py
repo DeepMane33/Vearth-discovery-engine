@@ -45,32 +45,46 @@ def _box_depth(phase, flux, frac=0.05):
     return base.mean() - deep.mean(), deep.std() / np.sqrt(max(1, deep.size))
 
 
-def _astropy_bls(time, flux):
-    """Run real BoxLeastSquares from astropy."""
+def _astropy_bls(time, flux, fast=False):
+    """Run real BoxLeastSquares from astropy.
+
+    fast=True uses a coarser duration/period grid (~5s vs ~70s) suitable
+    for Monte Carlo bootstrap iterations where fine resolution is not
+    needed for uncertainty estimates.
+    """
     try:
         from astropy.timeseries import BoxLeastSquares
         t = np.asarray(time, dtype=float)
         f = np.asarray(flux, dtype=float)
 
-        duration_grid = np.linspace(0.01, 0.2, 30)
+        if fast:
+            duration_grid = np.linspace(0.02, 0.15, 6)
+            frequency_factor = 6.0
+        else:
+            duration_grid = np.linspace(0.01, 0.2, 10)
+            frequency_factor = 3.0
         model = BoxLeastSquares(t, f)
         periodogram = model.autopower(duration_grid,
                                        minimum_period=0.5,
-                                       maximum_period=min(10.0, (t[-1] - t[0]) / 3.0))
+                                       maximum_period=min(10.0, (t[-1] - t[0]) / 3.0),
+                                       frequency_factor=frequency_factor)
 
         periods = np.array(periodogram.period)
         powers = np.array(periodogram.power)
 
-        best_idx = np.argmax(powers)
+        best_idx = int(np.argmax(powers))
         best_period = periods[best_idx]
         best_power = powers[best_idx]
+        duration = float(periodogram.duration[best_idx])
 
-        stats = model.compute_stats(best_period,
-                                     periodogram.duration[best_idx],
-                                     t[0])
+        stats = model.compute_stats(best_period, duration, t[0])
         depth = stats["depth"][0]
-        t0 = stats["transit_time"][0]
-        duration_days = stats["duration"][0]
+        transit_times = stats.get("transit_times")
+        if transit_times is not None and len(transit_times) > 0:
+            t0 = float(np.asarray(transit_times)[0])
+        else:
+            t0 = float(t[0])
+        duration_days = duration
 
         phase = _fold(t, best_period, t0)
         in_transit = (phase < 0.05) | (phase > 0.95)
@@ -93,10 +107,13 @@ def _astropy_bls(time, flux):
             "t0": float(t0),
             "n_transits": int(n_transits),
             "duration_days": float(duration_days),
-            "periods": periods.tolist(),
-            "powers": powers.tolist(),
+            "periods": [] if fast else periods.tolist(),
+            "powers": [] if fast else powers.tolist(),
         }
     except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("astropy BLS failed, using fallback "
+                                            "box search: %s: %s", type(e).__name__, e)
         return None
 
 
@@ -128,6 +145,72 @@ def _fallback_bls(time, flux, pmin=0.5, pmax=10.0, npoints=1200):
         "periods": [],
         "powers": [],
     }
+
+
+def analyze_fast_window(time, flux, center, window_frac=0.3):
+    """Lightweight BLS re-search restricted to +/-window_frac around center.
+
+    Used by the Monte Carlo bootstrap: the period posterior after a
+    detection lives near the nominal period, so a narrow coarse search
+    (~0.2s) replaces the full blind search (~2-70s) per iteration.
+    """
+    t = np.asarray(time, dtype=float)
+    f = np.asarray(flux, dtype=float)
+    f = f / np.nanmedian(f)
+    pmin = max(0.1, center * (1.0 - window_frac))
+    pmax = center * (1.0 + window_frac)
+    try:
+        from astropy.timeseries import BoxLeastSquares
+        duration_grid = np.linspace(0.02, 0.15, 5)
+        model = BoxLeastSquares(t, f)
+        pg = model.autopower(duration_grid, minimum_period=pmin,
+                             maximum_period=pmax, frequency_factor=8.0)
+        periods = np.asarray(pg.period)
+        powers = np.asarray(pg.power)
+        if len(periods) == 0 or not np.isfinite(powers).any():
+            raise RuntimeError("empty periodogram")
+        idx = int(np.nanargmax(powers))
+        best_p = float(periods[idx])
+        best_d = float(pg.duration[idx])
+        stats = model.compute_stats(best_p, best_d, float(t[0]))
+        n_tr = int(len(np.asarray(stats.get("per_transit_count", []))))
+        if n_tr == 0:
+            n_tr = int(len(stats.get("transit_times", [])))
+        tts = stats.get("transit_times")
+        t0_tr = float(np.asarray(tts)[0]) if tts is not None and len(tts) > 0 else float(t[0])
+        depth_val = float(np.abs(np.asarray(stats["depth"], dtype=float)[0]))
+        phase = _fold(t, best_p, t0_tr)
+        half = max(0.005, best_d / best_p / 2.0)
+        in_tr = (phase < half) | (phase > 1 - half)
+        out_tr = ~in_tr
+        if in_tr.sum() >= 3 and out_tr.sum() >= 3:
+            err = f[in_tr].std() / np.sqrt(int(in_tr.sum()))
+            snr = float((f[out_tr].mean() - f[in_tr].mean()) / err) if err > 0 else 0.0
+        else:
+            snr = float(powers[idx] * 10.0)
+        return {
+            "transit": {
+                "period": best_p,
+                "depth": depth_val,
+                "snr": abs(snr),
+                "t0": t0_tr,
+                "n_transits": n_tr,
+            },
+            "depth_ppm": int(depth_val * 1e6),
+            "period_days": best_p,
+        }
+    except Exception:
+        phase = _fold(t, center, t[0])
+        depth, err = _box_depth(phase, f)
+        return {
+            "transit": {
+                "period": float(center), "depth": float(depth),
+                "snr": float(depth / err if err else 0.0),
+                "t0": float(t[0]), "n_transits": 0,
+            },
+            "depth_ppm": int(depth * 1e6),
+            "period_days": float(center),
+        }
 
 
 def isolation_outliers(time, flux):
@@ -186,7 +269,7 @@ def _estimate_stellar_radius(metadata):
     return float(R_sun)
 
 
-def analyze(time, flux, metadata=None):
+def analyze(time, flux, metadata=None, fast=False):
     t = np.asarray(time, dtype=float)
     fl = np.asarray(flux, dtype=float)
 
@@ -196,7 +279,7 @@ def analyze(time, flux, metadata=None):
 
     out_idx, f, resid = isolation_outliers(t_clean, fl_clean)
 
-    bls_result = _astropy_bls(t_clean, f)
+    bls_result = _astropy_bls(t_clean, f, fast=fast)
     if bls_result is None:
         bls_result = _fallback_bls(t_clean, f)
 
@@ -223,8 +306,8 @@ def analyze(time, flux, metadata=None):
         "noise_floor_ppm": int(noise_floor * 1e6),
         "reduced_chi2": float(chi_squared_reduced),
         "flux_residuals": resid,
-        "bls_periods": bls_result.get("periods"),
-        "bls_powers": bls_result.get("powers"),
+        "bls_periods": None if fast else bls_result.get("periods"),
+        "bls_powers": None if fast else bls_result.get("powers"),
         "transit_duration_days": bls_result.get("duration_days", 0),
         "transit_t0": bls_result.get("t0", 0),
     }

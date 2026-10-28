@@ -29,7 +29,7 @@ def _build_client():
         key = CEREBRAS_API_KEY if provider == "cerebras" else OPENAI_API_KEY
         base = CEREBRAS_BASE_URL if provider == "cerebras" else None
         if key:
-            kwargs = {"api_key": key, "timeout": 8.0, "max_retries": 0}
+            kwargs = {"api_key": key, "timeout": 60.0, "max_retries": 1}
             if base:
                 kwargs["base_url"] = base
             client = OpenAI(**kwargs)
@@ -48,7 +48,7 @@ def _build_client():
             return _complete
 
     if provider == "anthropic" and _HAS_ANTHROPIC and ANTHROPIC_API_KEY:
-        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=8.0)
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY, timeout=60.0)
 
         def _complete(system, user, temperature=0.3, max_tokens=1200):
             msg = client.messages.create(

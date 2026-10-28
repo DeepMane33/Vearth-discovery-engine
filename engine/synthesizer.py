@@ -49,7 +49,7 @@ SYSTEM = (
     "Do NOT fabricate numbers beyond those given. "
     "If this is a false positive, write a null result paper. "
     "Keep tone formal and neutral. Use SI units. "
-    "Output ONLY clean Markdown — no HTML tags. Use ## for headings, "
+    "Output ONLY clean Markdown â€” no HTML tags. Use ## for headings, "
     "blank lines for paragraphs, - for lists, | for tables."
 )
 
@@ -284,7 +284,7 @@ These uncertainties represent the intrinsic measurement precision given the nois
 ---
 
 ## Abstract
-We present an automated transit search analysis of **{target}** using TESS photometric data. Applying a Box Least Squares (BLS) periodogram analysis combined with a comprehensive 17-test verification battery, we identify a {depth} ppm periodic dip at a best-fit period of {period} days with {n_tr} recurring transits and a signal-to-noise ratio of {snr:.2f}. Stellar parameters {stellar_note}: Teff = {teff} K, Rs = {rs} Rsun, Ms = {ms} Msun. The implied planet radius is {rp:.2f} Re ({rp_rj:.4f} Rj), classifying it as a **{classification}**. The equilibrium temperature is {teq:.0f} K, placing the orbit {hz_note}. Following rigorous verification including odd-even depth comparison, secondary eclipse search, V-shape analysis, phase curve analysis, harmonic alias detection, transit shape metrics, window function analysis, stellar density consistency, bootstrap false alarm probability, chromaticity, and NASA Exoplanet Archive cross-matching, the candidate is **{verdict_text}** at {conf} confidence ({tests_passed}/{tests_total} verification tests passed).
+We present an automated transit search analysis of **{target}** using TESS photometric data. Applying a Box Least Squares (BLS) periodogram analysis combined with a comprehensive 15-test verification battery, we identify a {depth} ppm periodic dip at a best-fit period of {period} days with {n_tr} recurring transits and a signal-to-noise ratio of {snr:.2f}. Stellar parameters {stellar_note}: Teff = {teff} K, Rs = {rs} Rsun, Ms = {ms} Msun. The implied planet radius is {rp:.2f} Re ({rp_rj:.4f} Rj), classifying it as a **{classification}**. The equilibrium temperature is {teq:.0f} K, placing the orbit {hz_note}. Following rigorous verification including odd-even depth comparison, secondary eclipse search, V-shape analysis, phase curve analysis, harmonic alias detection, transit shape metrics, window function analysis, stellar density consistency, bootstrap false alarm probability, chromaticity, and NASA Exoplanet Archive cross-matching, the candidate is **{verdict_text}** at {conf} confidence ({tests_passed}/{tests_total} verification tests passed).
 
 ## 1. Introduction
 Transit photometry remains the most prolific method for exoplanet discovery, responsible for the majority of the 6,300+ confirmed exoplanets as of 2026. The method detects the characteristic periodic dimming of a host star as an orbiting body crosses the stellar disk. The primary challenge is distinguishing genuine planetary transits from astrophysical false positives (eclipsing binaries, blended sources) and instrumental artifacts.
@@ -345,7 +345,7 @@ We employed the **Box Least Squares (BLS)** algorithm as implemented in `astropy
 | Tidal locking | {tidal.get('assessment', 'unknown')} |
 
 ### 3.6 Verification Battery
-A 17-test verification protocol was applied following professional exoplanet vetting standards.
+A 15-test verification protocol was applied following professional exoplanet vetting standards.
 
 ## 4. Results
 | Quantity | Value |

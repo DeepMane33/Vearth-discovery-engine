@@ -4,7 +4,7 @@ Stages:
   1. COLLECT     - Fetch TESS light curve + stellar parameters + multi-mission
   2. CROSS-MATCH - Check if target already has known planets
   3. ANALYZE     - Real BLS + transit fitting + physics (sequential multi-planet)
-  4. VALIDATE    - 17-test verification battery
+  4. VALIDATE    - 15-test verification battery
   5. SELF-VERIFY - AI self-dialog anti-hallucination
   6. PLOT        - Publication-quality figures
   7. SYNTHESIZE  - Write research paper
@@ -21,20 +21,21 @@ from engine import ingestion, analyzer, critic, verifier, synthesizer, plots
 from engine import physics
 
 
-def _remove_signal_and_rediscover(time_arr, flux_arr, period, t0, depth,
-                                   max_planets=5):
+def _remove_signal_and_rediscover(time_arr, flux_arr, first_analysis=None,
+                                  max_planets=5):
     """Sequentially detect and remove planet signals.
 
     After finding a transit, subtract it and search for more planets.
-    Returns list of (analysis, time, flux) for each detected planet.
+    Pass first_analysis (result of analyzer.analyze) to avoid
+    recomputing the primary search. Returns list of per-planet dicts.
     """
     results = []
     t = np.copy(time_arr)
     f = np.copy(flux_arr)
 
-    for planet_num in range(max_planets):
-        analysis = analyzer.analyze(t, f)
+    analysis = first_analysis if first_analysis is not None else analyzer.analyze(t, f)
 
+    for planet_num in range(max_planets):
         if not analysis.get("is_anomaly"):
             break
         if analysis.get("snr", 0) < 5.0:
@@ -67,18 +68,27 @@ def _remove_signal_and_rediscover(time_arr, flux_arr, period, t0, depth,
         f = f / model
         f = f / np.nanmedian(f)
 
+        analysis = analyzer.analyze(t, f)
+
     return results
 
 
-def _monte_carlo_uncertainty(time_arr, flux_arr, n_iterations=500):
+def _monte_carlo_uncertainty(time_arr, flux_arr, n_iterations=200,
+                             nominal_period=None):
     """Bootstrap Monte Carlo for parameter uncertainty propagation.
 
-    Perturbs the light curve within noise, re-runs BLS, returns
-    posterior distributions for period, depth, duration.
+    Perturbs the light curve within noise, re-runs a fast BLS search,
+    returns posterior distributions for period, depth, duration.
+    When nominal_period is given the fast search is restricted to a
+    +/-30% window around it, which is where the posterior lives and is
+    ~10x cheaper than a blind full-range search.
     """
     rng = np.random.default_rng(42)
     t = np.asarray(time_arr, dtype=float)
     f = np.asarray(flux_arr, dtype=float)
+    med = np.nanmedian(f)
+    if med and np.isfinite(med) and med != 0:
+        f = f / med
 
     noise = np.std(f[np.abs(f - 1.0) < 0.01]) if np.sum(np.abs(f - 1.0) < 0.01) > 10 else 0.001
 
@@ -90,7 +100,14 @@ def _monte_carlo_uncertainty(time_arr, flux_arr, n_iterations=500):
         f_perturbed = f + rng.normal(0, noise, len(f))
 
         try:
-            ana = analyzer.analyze(t, f_perturbed)
+            if nominal_period:
+                ana = analyzer.analyze_fast_window(
+                    t, f_perturbed,
+                    center=nominal_period,
+                    window_frac=0.3,
+                )
+            else:
+                ana = analyzer.analyze(t, f_perturbed, fast=True)
             transit = ana.get("transit", {})
             if transit.get("period") and transit.get("period") > 0:
                 periods.append(transit["period"])
@@ -177,16 +194,16 @@ def run(target, progress_callback=None):
 
     _progress("analyze", "Running BLS transit search and multi-planet detection...")
 
+    primary = analyzer.analyze(lc["time"], lc["flux"])
+
     multi_planet_results = _remove_signal_and_rediscover(
         lc["time"], lc["flux"],
-        period=None, t0=None, depth=None,
+        first_analysis=primary,
         max_planets=5,
     )
 
     if multi_planet_results:
         primary = multi_planet_results[0]["analysis"]
-    else:
-        primary = analyzer.analyze(lc["time"], lc["flux"])
 
     _progress("physics", "Computing planet physics and atmospheric characterization...")
 
@@ -210,15 +227,23 @@ def run(target, progress_callback=None):
 
     _progress("montecarlo", "Running Monte Carlo uncertainty propagation...")
 
-    mc_results = _monte_carlo_uncertainty(lc["time"], lc["flux"], n_iterations=500)
+    nominal_period = primary.get("period_days") or (
+        primary.get("transit", {}) or {}).get("period")
+    mc_results = _monte_carlo_uncertainty(
+        lc["time"], lc["flux"],
+        n_iterations=200,
+        nominal_period=nominal_period if (
+            nominal_period and nominal_period > 0) else None,
+    )
 
-    _progress("validate", "Running 17-test verification battery...")
+    _progress("validate", "Running 15-test verification battery...")
 
     validation = critic.validate(
         primary, target,
         time_arr=lc["time"],
         flux_arr=lc["flux"],
         known_planets=known_planets,
+        stellar_info=stellar_info,
     )
 
     for pm in all_planets:

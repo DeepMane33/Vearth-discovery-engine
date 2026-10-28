@@ -25,7 +25,8 @@ SYSTEM = (
 )
 
 
-def validate(analysis, target, time_arr=None, flux_arr=None, known_planets=None):
+def validate(analysis, target, time_arr=None, flux_arr=None, known_planets=None,
+             stellar_info=None):
     transit = analysis.get("transit", {})
     depth = analysis.get("depth_ppm", 0)
     snr = analysis.get("snr", 0.0)
@@ -39,6 +40,7 @@ def validate(analysis, target, time_arr=None, flux_arr=None, known_planets=None)
         flux_arr if flux_arr is not None else np.array([]),
         analysis,
         known_planets=known_planets,
+        stellar_info=stellar_info,
     )
 
     rag = vectorstore.query(

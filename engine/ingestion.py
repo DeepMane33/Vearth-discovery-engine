@@ -35,44 +35,21 @@ def query_simbad(target):
 
 
 def query_gaia(target):
-    """Query Gaia DR3 for parallax, proper motion, and photometry."""
+    """Query Gaia DR3 for parallax, proper motion, and photometry.
+
+    Delegates to datasources.get_gaia_params, which first resolves the
+    target to coordinates (via SIMBAD or MAST TIC) and then runs a
+    simple cone search. The previous nested-ADQL query used a
+    non-existent source_name column and hung the pipeline.
+    """
     try:
-        from astroquery.gaia import Gaia
-        Gaia.ROW_LIMIT = 5
-        job = Gaia.launch_job_async(
-            f"""
-            SELECT source_id, ra, dec, parallax, pmra, pmdec, phot_g_mean_mag,
-                   phot_bp_mean_mag, phot_rp_mean_mag, ruwe
-            FROM gaiadr3.gaia_source
-            WHERE 1=CONTAINS(POINT('ICRS', ra, dec),
-                             CIRCLE('ICRS', 
-                                    (SELECT ra FROM gaiadr3.gaia_source WHERE source_id =
-                                     (SELECT source_id FROM gaiadr3.gaia_source 
-                                      WHERE 1=CONTAINS(POINT('ICRS', ra, dec),
-                                                     CIRCLE('ICRS', 
-                                                            (SELECT ra FROM gaiadr3.gaia_source 
-                                                             WHERE source_name='{target}'
-                                                             LIMIT 1), 5/3600)) LIMIT 1),
-                                    5/3600))
-            ORDER BY parallax DESC
-            """
-        )
-        results = job.get_results()
-        if len(results) == 0:
+        from engine.datasources import get_gaia_params
+        result = get_gaia_params(target)
+        if not result:
             return {}
-        row = results[0]
-        return {
-            "source_id": int(row['source_id']),
-            "ra": float(row['ra']),
-            "dec": float(row['dec']),
-            "parallax": float(row['parallax']),
-            "pmra": float(row['pmra']),
-            "pmdec": float(row['pmdec']),
-            "g_mag": float(row['phot_g_mean_mag']),
-            "bp_mag": float(row['phot_bp_mean_mag']),
-            "rp_mag": float(row['phot_rp_mean_mag']),
-            "ruwe": float(row['ruwe']),
-        }
+        out = dict(result)
+        out.pop("source", None)
+        return out
     except Exception as e:
         return {"error": f"Gaia: {type(e).__name__}"}
 

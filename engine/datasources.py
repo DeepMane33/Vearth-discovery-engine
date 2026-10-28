@@ -94,15 +94,42 @@ def get_known_planet_by_period(period_days, tolerance=0.01):
 
 
 def get_stellar_params(target_name):
-    """Fetch stellar parameters from the Exoplanet Archive for a target star."""
-    query = (
-        f"SELECT pl_hostname,pl_star_teff,pl_starlogg,pl_star_feh,"
-        f"pl_star_radius,pl_star_mass "
-        f"FROM pscomppars WHERE pl_hostname='{target_name}' LIMIT 1"
-    )
-    results = query_exoplanet_archive(query)
-    if results:
-        return results[0]
+    """Fetch stellar parameters from the Exoplanet Archive for a target star.
+
+    Uses the unified pscomppars schema (hostname, st_* columns, TOP/LIMIT
+    support quirks of the Oracle TAP backend). Falls back progressively:
+    exact pl_name match -> hostname match -> planet-suffix-stripped match.
+    Returns legacy-shaped keys (pl_star_*) expected by ingestion.
+    """
+    stripped = target_name
+    parts = target_name.rsplit(" ", 1)
+    if len(parts) == 2 and len(parts[1]) <= 2 and parts[1].isalpha():
+        stripped = parts[0]
+
+    attempts = [
+        f"SELECT TOP 1 pl_name, hostname, st_teff, st_logg, st_met, "
+        f"st_rad, st_mass FROM pscomppars WHERE pl_name = '{target_name}'",
+        f"SELECT TOP 1 pl_name, hostname, st_teff, st_logg, st_met, "
+        f"st_rad, st_mass FROM pscomppars WHERE hostname = '{target_name}'",
+    ]
+    if stripped != target_name:
+        attempts.append(
+            f"SELECT TOP 1 pl_name, hostname, st_teff, st_logg, st_met, "
+            f"st_rad, st_mass FROM pscomppars WHERE hostname = '{stripped}'")
+
+    for query in attempts:
+        results = query_exoplanet_archive(query)
+        if results:
+            row = results[0]
+            return {
+                "pl_star_teff": row.get("st_teff"),
+                "pl_starlogg": row.get("st_logg"),
+                "pl_star_feh": row.get("st_met"),
+                "pl_star_radius": row.get("st_rad"),
+                "pl_star_mass": row.get("st_mass"),
+                "hostname": row.get("hostname"),
+                "pl_name": row.get("pl_name"),
+            }
     return None
 
 
@@ -143,6 +170,31 @@ def query_simbad(target_name):
         return {}
 
 
+def _resolve_tic_coords(target_name):
+    """Resolve TIC / TOI identifiers to RA/Dec via MAST catalogs.
+
+    SIMBAD does not index TIC IDs, so names like 'TIC 268684168' or
+    'TOI 700' always fail there. MAST's catalog service resolves them.
+    """
+    try:
+        from astroquery.mast import Catalogs
+        tbl = Catalogs.query_object(target_name, catalog="TIC", radius=0.002)
+        if tbl is None or len(tbl) == 0:
+            return None
+        row = tbl[0]
+        return {
+            "main_id": str(row.get("ID", target_name)),
+            "ra": float(row["ra"]),
+            "dec": float(row["dec"]),
+            "otype": "star (TIC)",
+            "resolver": "mast_tic",
+        }
+    except Exception as e:
+        log.warning("MAST TIC coordinate resolve failed for %s: %s",
+                    target_name, e)
+        return None
+
+
 def query_simbad_coordinates(target_name):
     """Get RA/Dec from SIMBAD using a simpler name resolver."""
     cache_key = "simbad_coords_" + target_name.replace(" ", "_")
@@ -175,10 +227,22 @@ def query_simbad_coordinates(target_name):
                     coords["mag_v"] = f.get("flux")
                 if f.get("filter") == "B":
                     coords["mag_b"] = f.get("flux")
+        if not coords.get("ra"):
+            up = target_name.upper()
+            if up.startswith("TIC") or up.startswith("TOI"):
+                tic_coords = _resolve_tic_coords(target_name)
+                if tic_coords:
+                    coords.update(tic_coords)
         _cache_set(cache_key, coords)
         return coords
     except Exception as e:
         log.warning("SIMBAD coordinate query failed for %s: %s", target_name, e)
+        up = target_name.upper()
+        if up.startswith("TIC") or up.startswith("TOI"):
+            tic_coords = _resolve_tic_coords(target_name)
+            if tic_coords:
+                _cache_set(cache_key, tic_coords)
+                return tic_coords
         return {}
 
 
@@ -280,7 +344,8 @@ def get_gaia_params(target_name):
 def get_tic_params(target_name):
     """Fetch TESS Input Catalog (TIC) parameters.
 
-    Returns crowding, contamination ratio, TIC ID, and stellar properties.
+    Uses astroquery MAST Catalogs (the archive TAP has no tic_v8 table).
+    Returns teff, logg, feh, radius, mass, T magnitude, distance.
     """
     cache_key = "tic_" + target_name.replace(" ", "_")
     cached = _cache_get(cache_key, max_age_hours=168)
@@ -288,39 +353,38 @@ def get_tic_params(target_name):
         return cached
 
     try:
-        coords = query_simbad_coordinates(target_name)
-        ra = coords.get("ra")
-        dec = coords.get("dec")
-        if not ra or not dec:
+        from astroquery.mast import Catalogs
+        tbl = Catalogs.query_object(target_name, catalog="TIC", radius=0.002)
+        if tbl is None or len(tbl) == 0:
+            return None
+        row = tbl[0]
+
+        def _g(*names):
+            for n in names:
+                if n in row.colnames:
+                    v = row[n]
+                    if v is not None and str(v) not in ("", "--", "nan"):
+                        try:
+                            return float(v)
+                        except (TypeError, ValueError):
+                            return str(v)
             return None
 
-        query = (
-            f"SELECT TOP 1 "
-            f"ticid, ra, dec, mag, teff, logg, mh, rad, mass, "
-            f"rho, lumclass, dist, epoch, congregation, "
-            f"e_irname, e_angsep "
-            f"FROM tic_v8 "
-            f"WHERE 1=CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', {ra}, {dec}, 0.005)) "
-            f"ORDER BY mag ASC"
-        )
-
-        resp = requests.get(TIC_TAP, params={
-            "request": "doQuery",
-            "lang": "adql",
-            "format": "json",
-            "query": query,
-        }, timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
-
-        if "data" in data and data["data"]:
-            row = data["data"][0]
-            cols = [c["name"] for c in data.get("metadata", [])]
-            result = dict(zip(cols, row)) if cols else {}
-            result["source"] = "tic_v8"
-            _cache_set(cache_key, result)
-            return result
-        return None
+        result = {
+            "ticid": str(row["ID"]) if "ID" in row.colnames else target_name,
+            "teff": _g("Teff", "teff"),
+            "logg": _g("logg"),
+            "feh": _g("[Fe/H]", "mh"),
+            "rad": _g("R", "rad"),
+            "mass": _g("mass"),
+            "mag": _g("Tmag", "mag"),
+            "dist": _g("dist"),
+            "ra": _g("ra"),
+            "dec": _g("dec"),
+            "source": "mast_tic",
+        }
+        _cache_set(cache_key, result)
+        return result
     except Exception as e:
         log.warning("TIC query failed for %s: %s", target_name, e)
         return None
