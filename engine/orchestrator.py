@@ -6,8 +6,9 @@ Stages:
   3. ANALYZE     - Real BLS + transit fitting + physics (sequential multi-planet)
   4. VALIDATE    - 15-test verification battery
   5. SELF-VERIFY - AI self-dialog anti-hallucination
-  6. PLOT        - Publication-quality figures
-  7. SYNTHESIZE  - Write research paper
+  6. NOVELTY     - Check against public catalogs (archive, TOI, SIMBAD, arXiv)
+  7. PLOT        - Publication-quality figures
+  8. SYNTHESIZE  - Write research paper
   8. SAVE        - Store results
 
 v3.0 enhancements:
@@ -18,7 +19,7 @@ v3.0 enhancements:
 """
 import numpy as np
 from engine import ingestion, analyzer, critic, verifier, synthesizer, plots
-from engine import physics
+from engine import physics, novelty
 
 
 def _remove_signal_and_rediscover(time_arr, flux_arr, first_analysis=None,
@@ -261,6 +262,19 @@ def run(target, progress_callback=None):
                 vt_simple["depth_ppm"] > 50000
             )
 
+    _progress("novelty", "Running novelty check against public catalogs...")
+
+    nominal_period = primary.get("period_days") or (
+        primary.get("transit", {}) or {}).get("period")
+    novelty = novelty.check_novelty(
+        target,
+        period_days=nominal_period,
+        depth_ppm=primary.get("depth_ppm"),
+        stellar_info=stellar_info,
+        analysis=primary,
+    )
+    validation["novelty"] = novelty
+
     _progress("verify", "Running AI self-verification dialog...")
 
     self_verify = verifier.self_dialog_verify(
@@ -304,6 +318,7 @@ def run(target, progress_callback=None):
         plots=gen_plots,
         multi_planet_data=all_planets,
         mc_results=mc_results,
+        novelty=novelty,
     )
 
     _progress("done", "Pipeline complete.")

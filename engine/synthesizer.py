@@ -55,7 +55,14 @@ SYSTEM = (
 
 
 def write_paper(target, analysis, validation, stellar_info=None, physics_data=None,
-                 plots=None, literature=None, multi_planet_data=None, mc_results=None):
+                 plots=None, literature=None, multi_planet_data=None, mc_results=None,
+                 novelty=None):
+    if novelty is None:
+        raise ValueError(
+            "Paper generation blocked: novelty check has not run. "
+            "Run engine/novelty.py check_novelty() before writing a paper."
+        )
+
     refs = validation.get("rag_refs", [])
     refs_block = "\n".join(
         f"- [{r['id']}] (retrieval score {r['score']})" for r in refs)
@@ -113,6 +120,9 @@ def write_paper(target, analysis, validation, stellar_info=None, physics_data=No
         f"EQUILIBRIUM TEMP: {teq} K\n"
         f"IN HABITABLE ZONE: {in_hz}\n"
         f"CLASSIFICATION: {classification}\n"
+        f"NOVELTY STATUS: {novelty.get('status', 'UNKNOWN')}\n"
+        f"NOVELTY CHECKED: {', '.join(novelty.get('checked', []))}\n"
+        f"NOVELTY REFERENCES: {len(novelty.get('references', []))} match(es) found\n"
         f"VERDICT: {verdict}\n"
         f"HYPOTHESIS: {hypothesis}\n"
         f"RETRIEVED LITERATURE:\n{refs_block}\n"
@@ -156,7 +166,7 @@ def write_paper(target, analysis, validation, stellar_info=None, physics_data=No
     if res["source"] == "fallback":
         md = _fallback_paper(target, analysis, validation, stellar_info,
                               physics_data, plots, literature,
-                              multi_planet_data, mc_results)
+                              multi_planet_data, mc_results, novelty)
         return {"markdown": md, "source": "fallback", "facts_used": facts}
     md = _clean_markdown(res["text"])
     return {"markdown": md, "source": res["source"],
@@ -165,7 +175,7 @@ def write_paper(target, analysis, validation, stellar_info=None, physics_data=No
 
 def _fallback_paper(target, analysis, validation, stellar_info,
                      physics_data, plots, literature,
-                     multi_planet_data=None, mc_results=None):
+                     multi_planet_data=None, mc_results=None, novelty=None):
     transit = analysis.get("transit", {})
     depth = analysis.get("depth_ppm", 0)
     snr = analysis.get("snr", 0.0)
@@ -183,6 +193,36 @@ def _fallback_paper(target, analysis, validation, stellar_info,
     in_hz = phys.get("in_habitable_zone", False)
     classification = phys.get("planet_classification", "unknown")
     t_dur = phys.get("transit_duration_hours", 0)
+
+    novelty_status = novelty.get("status", "UNKNOWN") if novelty else "UNKNOWN"
+    novelty_checked = (", ".join(novelty.get("checked", []))
+                       if novelty and novelty.get("checked") else "not run")
+    if novelty_status == "KNOWN":
+        novelty_msg = ("This signal matches a known planet or TOI in public "
+                       "catalogs. See references below.")
+    elif novelty_status == "POSSIBLY KNOWN":
+        novelty_msg = ("This signal may correspond to a known object; "
+                       "verify against listed references.")
+    else:
+        novelty_msg = ("No match found in public catalogs (NASA Exoplanet "
+                       "Archive, TOI catalog, SIMBAD, arXiv). This does not "
+                       "constitute confirmation of a new discovery.")
+
+    novelty_refs_lines = []
+    if novelty and novelty.get("references"):
+        for r in novelty["references"]:
+            line = "- [" + str(r.get("source", "")) + "] " + str(r.get("name", ""))
+            if r.get("period"):
+                line += " (period: " + str(r.get("period")) + " d)"
+            if r.get("disposition"):
+                line += " — " + str(r.get("disposition", ""))
+            novelty_refs_lines.append(line)
+    novelty_refs_text = ""
+    if novelty_refs_lines:
+        novelty_refs_text = ("## 7.5. Novelty References\n\n"
+                             "The following public sources were checked for "
+                             "prior knowledge of this signal:\n"
+                             + "\n".join(novelty_refs_lines))
 
     stellar = stellar_info or {}
     has_real_stellar_fn = stellar.get("teff") is not None and stellar.get("radius_rsun") is not None
@@ -280,11 +320,18 @@ These uncertainties represent the intrinsic measurement precision given the nois
 **Date:** 2026
 **Pipeline:** VEARTH Discovery Engine v3.0
 **Confidence Level:** {conf.upper()}
+**Novelty Status:** {novelty_status}
+**Novelty Checked:** {novelty_checked}
+
+---
+
+**Novelty check result:** {novelty_status}.
+{novelty_msg}
 
 ---
 
 ## Abstract
-We present an automated transit search analysis of **{target}** using TESS photometric data. Applying a Box Least Squares (BLS) periodogram analysis combined with a comprehensive 15-test verification battery, we identify a {depth} ppm periodic dip at a best-fit period of {period} days with {n_tr} recurring transits and a signal-to-noise ratio of {snr:.2f}. Stellar parameters {stellar_note}: Teff = {teff} K, Rs = {rs} Rsun, Ms = {ms} Msun. The implied planet radius is {rp:.2f} Re ({rp_rj:.4f} Rj), classifying it as a **{classification}**. The equilibrium temperature is {teq:.0f} K, placing the orbit {hz_note}. Following rigorous verification including odd-even depth comparison, secondary eclipse search, V-shape analysis, phase curve analysis, harmonic alias detection, transit shape metrics, window function analysis, stellar density consistency, bootstrap false alarm probability, chromaticity, and NASA Exoplanet Archive cross-matching, the candidate is **{verdict_text}** at {conf} confidence ({tests_passed}/{tests_total} verification tests passed).
+We present an automated transit search analysis of **{target}** using TESS photometric data. Applying a Box Least Squares (BLS) periodogram analysis combined with a comprehensive 15-test verification battery, we identify a {depth} ppm periodic dip at a best-fit period of {period} days with {n_tr} recurring transits and a signal-to-noise ratio of {snr:.2f}. Stellar parameters {stellar_note}: Teff = {teff} K, Rs = {rs} Rsun, Ms = {ms} Msun. The implied planet radius is {rp:.2f} Re ({rp_rj:.4f} Rj), classifying it as a **{classification}**. The equilibrium temperature is {teq:.0f} K, placing the orbit {hz_note}. Novelty status: {novelty.get('status', 'UNKNOWN')}. {"" if novelty.get('status') == "KNOWN" else ""}The candidate is **{verdict_text}** at {conf} confidence ({tests_passed}/{tests_total} verification tests passed). A "NO MATCH FOUND" novelty result does not constitute confirmation of a new discovery.
 
 ## 1. Introduction
 Transit photometry remains the most prolific method for exoplanet discovery, responsible for the majority of the 6,300+ confirmed exoplanets as of 2026. The method detects the characteristic periodic dimming of a host star as an orbiting body crosses the stellar disk. The primary challenge is distinguishing genuine planetary transits from astrophysical false positives (eclipsing binaries, blended sources) and instrumental artifacts.
@@ -391,6 +438,9 @@ The automated analysis of {target} yields a {depth} ppm transit-like signal at {
 - Centroid shift analysis was not available in this automated pipeline
 - Ground-based follow-up with higher spatial resolution is necessary to rule out blending
 - This paper was generated by the VEARTH automated pipeline (rule-based fallback mode)
+- Novelty status is based on public catalog queries at the time of analysis; absence from catalogs does not confirm a new discovery
+
+{novelty_refs_text}
 
 ## 8. References
 {refs_lines}
