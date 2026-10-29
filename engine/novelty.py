@@ -63,24 +63,35 @@ def _check_exoplanet_archive(target: str,
 
 def _check_toi_catalog(target: str,
                        period_days: float | None = None) -> dict:
-    """Check the TOI catalog via the Exoplanet Archive TAP."""
+    """Check the TOI catalog via the Exoplanet Archive TAP.
+
+    Tries a few known table names because the Exoplanet Archive exposes
+    TOI data under different names in different TAP deployments.
+    """
     result: dict = {"matches": [], "source": "toi_catalog"}
     tic_id = _resolve_tic(target)
     if not tic_id:
         result["error"] = "could not resolve TIC ID"
         return result
 
-    try:
-        query = (
-            "SELECT tic_id, toi_id, disposition, pl_orbper, pl_rade, "
-            "pl_eqt, ra, dec FROM toi "
-            f"WHERE tic_id = {tic_id}"
-        )
-        matches = datasources.query_exoplanet_archive(query)
-        result["matches"] = matches[:10]
-    except Exception as e:
-        result["error"] = f"{type(e).__name__}: {e}"
+    candidate_tables = ["toi", "toi_cat", "toi_data"]
+    last_error = None
+    for table in candidate_tables:
+        try:
+            query = (
+                "SELECT tic_id, toi_id, disposition, pl_orbper, pl_rade, "
+                "pl_eqt, ra, dec FROM " + table + " "
+                f"WHERE tic_id = {tic_id}"
+            )
+            matches = datasources.query_exoplanet_archive(query)
+            result["matches"] = matches[:10]
+            result["table_used"] = table
+            return result
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {e}"
+            continue
 
+    result["error"] = last_error or "all toi table queries failed"
     return result
 
 
