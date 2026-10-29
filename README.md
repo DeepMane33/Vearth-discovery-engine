@@ -8,7 +8,7 @@ drafts an IMRaD research report citing the exact data logs.
 
 ## v3.0 Enhancements
 
-- **15-test verification battery** (up from 10): phase curve, chromaticity, harmonic alias, transit shape metrics, window function, stellar density consistency
+- **15-test verification battery**: phase curve, chromaticity, harmonic alias, transit shape metrics, window function, stellar density consistency
 - **Multi-planet detection**: Sequentially detects up to 5 planets per target
 - **Monte Carlo uncertainty**: 500-iteration bootstrap for parameter posteriors
 - **Atmospheric characterization**: TSM/ESM metrics for JWST observability
@@ -19,19 +19,19 @@ drafts an IMRaD research report citing the exact data logs.
 
 Eight stages, one loop:
 
-1. **Collector** â€” `astroquery.mast` downloads the TESS light curve (cached). Also queries Gaia DR3, TIC, and Kepler/K2. Falls back to a synthetic curve offline.
-2. **Cross-match** â€” checks NASA Exoplanet Archive for known planets near the target.
-3. **Finder** â€” detrend + box-least-squares transit search + IsolationForest outliers. Sequentially detects up to 5 planets.
-4. **Validator** â€” 15-test verification battery (SNR, recurrence, odd-even, secondary eclipse, V-shape, bootstrap FAP, stellar variability, physical plausibility, catalog cross-match, phase curve, chromaticity, harmonic alias, transit shape, window function, stellar density consistency).
-5. **Critic** â€” LLM drafts a hypothesis, attacks it with skeptical self-questions, cross-checks each against retrieved literature, then veto / advance.
-6. **Verifier** â€” 4-round AI self-verification with physics evidence (atmospheric metrics, orbital stability, mass-radius).
-7. **Writer** â€” writes the IMRaD paper with multi-planet comparison, Monte Carlo uncertainties, and JWST characterization metrics.
-8. **Save** â€” stores results as JSON with publication-quality figures.
+1. **Collector** — `astroquery.mast` downloads the TESS light curve (cached). Also queries Gaia DR3, TIC, and Kepler/K2. Falls back to a synthetic curve offline.
+2. **Cross-match** — checks NASA Exoplanet Archive for known planets near the target.
+3. **Finder** — detrend + box-least-squares transit search + IsolationForest outliers. Sequentially detects up to 5 planets.
+4. **Validator** — 15-test verification battery (SNR, recurrence, odd-even, secondary eclipse, V-shape, bootstrap FAP, stellar variability, physical plausibility, catalog cross-match, phase curve, chromaticity, harmonic alias, transit shape, window function, stellar density consistency).
+5. **Critic** — LLM drafts a hypothesis, attacks it with skeptical self-questions, cross-checks each against retrieved literature, then veto / advance.
+6. **Verifier** — 4-round AI self-verification with physics evidence (atmospheric metrics, orbital stability, mass-radius).
+7. **Writer** — writes the IMRaD paper with multi-planet comparison, Monte Carlo uncertainties, and JWST characterization metrics.
+8. **Save** — stores results as JSON with publication-quality figures.
 
 ## Quick start
 
 ```powershell
-cd "C:\Users\Anil Mane\Documents\Default Project\discovery-engine"
+cd discovery-engine
 python -m pip install -r requirements.txt
 python app.py
 ```
@@ -68,7 +68,7 @@ engine/
   vectorstore.py        Memory (RAG)
   analyzer.py          Finder (ML) + multi-planet detection
   critic.py            Critic (self-questioning) + 15-test validation
-  validation_tests.py  17 verification tests
+  validation_tests.py  15 verification tests
   physics.py           Planet physics + atmospheric metrics
   datasources.py       SIMBAD, Exoplanet Archive, Gaia, TIC, arXiv
   verifier.py          AI self-verification (4-round dialog)

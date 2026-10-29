@@ -14,7 +14,7 @@ v3.0 enhancements:
   - Sequential multi-planet detection (up to 5 planets)
   - Monte Carlo uncertainty propagation
   - Multi-mission data integration (TESS + Kepler + Gaia + TIC)
-  - 17 validation tests (up from 10)
+  - 15 validation tests
 """
 import numpy as np
 from engine import ingestion, analyzer, critic, verifier, synthesizer, plots
