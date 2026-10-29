@@ -7,7 +7,7 @@ citing the exact data logs it used."""
 
 import re
 import numpy as np
-from engine import llm, physics
+from engine import llm, physics, paper_audit
 
 
 def _clean_markdown(text: str) -> str:
@@ -40,23 +40,25 @@ SYSTEM = (
     "- Data tables in Markdown format\n"
     "- Physics calculations with units\n"
     "- All verification test results\n"
-    "- Proper citations using [ref-id] format\n"
+    "- Proper citations using [ref-id] format — ONLY cite papers actually retrieved\n"
     "- Confidence statement\n"
     "- If multiple planets detected, include a comparative planet table\n"
     "- If Monte Carlo results available, include parameter uncertainties\n"
-    "- Include JWST atmospheric characterization potential (TSM/ESM)\n"
+    "- Include JWST atmospheric characterization potential (TSM/ESM) as ESTIMATES\n"
     "- Include orbital stability assessment\n"
+    "- State clearly that findings are CANDIDATES unless independently confirmed\n"
+    "- Mark all estimated values (mass from mass-radius, TSM, ESM) as ESTIMATED, not measured\n"
     "Do NOT fabricate numbers beyond those given. "
     "If this is a false positive, write a null result paper. "
     "Keep tone formal and neutral. Use SI units. "
-    "Output ONLY clean Markdown â€” no HTML tags. Use ## for headings, "
+    "Output ONLY clean Markdown — no HTML tags. Use ## for headings, "
     "blank lines for paragraphs, - for lists, | for tables."
 )
 
 
 def write_paper(target, analysis, validation, stellar_info=None, physics_data=None,
                  plots=None, literature=None, multi_planet_data=None, mc_results=None,
-                 novelty=None):
+                 novelty=None, retrieved_papers=None):
     if novelty is None:
         raise ValueError(
             "Paper generation blocked: novelty check has not run. "
@@ -84,6 +86,15 @@ def write_paper(target, analysis, validation, stellar_info=None, physics_data=No
     in_hz = phys.get("in_habitable_zone", False)
     classification = phys.get("planet_classification", "unknown")
     t_dur = phys.get("transit_duration_hours", 0)
+
+    # Estimated values (from models, not direct measurements)
+    est_mass = phys.get("estimated_mass_earth", 0)
+    est_mass_jup = phys.get("estimated_mass_jup", 0)
+    bulk_dens = phys.get("bulk_density_gcm3", 0)
+    tsm_val = phys.get("tsm", 0)
+    tsm_tier = phys.get("tsm_tier", "unknown")
+    esm_val = phys.get("esm", 0)
+    esm_tier = phys.get("esm_tier", "unknown")
 
     vt = validation.get("verification_tests", {})
     tests_passed = vt.get("passed_count", 0)
@@ -120,6 +131,10 @@ def write_paper(target, analysis, validation, stellar_info=None, physics_data=No
         f"EQUILIBRIUM TEMP: {teq} K\n"
         f"IN HABITABLE ZONE: {in_hz}\n"
         f"CLASSIFICATION: {classification}\n"
+        f"PLANET MASS (ESTIMATED from mass-radius relation): {est_mass} Me ({est_mass_jup} Mj)\n"
+        f"BULK DENSITY (ESTIMATED from mass estimate): {bulk_dens} g/cm3\n"
+        f"TSM (ESTIMATED atmospheric metric): {tsm_val} — {tsm_tier}\n"
+        f"ESM (ESTIMATED atmospheric metric): {esm_val} — {esm_tier}\n"
         f"NOVELTY STATUS: {novelty.get('status', 'UNKNOWN')}\n"
         f"NOVELTY CHECKED: {', '.join(novelty.get('checked', []))}\n"
         f"NOVELTY REFERENCES: {len(novelty.get('references', []))} match(es) found\n"
@@ -159,7 +174,11 @@ def write_paper(target, analysis, validation, stellar_info=None, physics_data=No
         "Write the complete research paper using ONLY these facts. "
         "Include all tables, calculations, verification results, "
         "multi-planet comparison, and Monte Carlo uncertainties. "
-        "If vetoed, frame as a null/false-positive result.\n\n" + facts
+        "If vetoed, frame as a null/false-positive result. "
+        "State clearly that all findings are CANDIDATES unless independently confirmed. "
+        "Mark all ESTIMATED values (mass from mass-radius relation, TSM, ESM) "
+        "as ESTIMATED, not measured. "
+        "Use ONLY citations from the retrieved literature list below.\n\n" + facts
     )
 
     res = llm.ask_llm(SYSTEM, user, temperature=0.3, max_tokens=4000)
@@ -167,15 +186,50 @@ def write_paper(target, analysis, validation, stellar_info=None, physics_data=No
         md = _fallback_paper(target, analysis, validation, stellar_info,
                               physics_data, plots, literature,
                               multi_planet_data, mc_results, novelty)
-        return {"markdown": md, "source": "fallback", "facts_used": facts}
-    md = _clean_markdown(res["text"])
-    return {"markdown": md, "source": res["source"],
-            "facts_used": facts}
+    else:
+        md = _clean_markdown(res["text"])
+
+    # --- Post-processing: enforce trustworthy paper rules ---
+
+    retrieved = retrieved_papers or []
+
+    # Strip citations that cannot be verified against retrieved papers
+    md = paper_audit.strip_unverified_citations(md, retrieved)
+
+    # Prepend mandatory header
+    header = paper_audit.generate_audit_header({
+        "target": target,
+        "ingestion": {"source": analysis.get("source", "unknown")},
+        "validation": {"veto": veto},
+    })
+    md = header + md
+
+    # Audit: every number in the paper must be traceable to results JSON
+    results_json = {
+        "target": target,
+        "analysis": analysis,
+        "validation": validation,
+        "physics": phys,
+        "stellar_info": stellar_info or {},
+        "novelty": novelty,
+        "monte_carlo": mc_results or {},
+        "multi_planet_results": multi_planet_data or [],
+    }
+    audit = paper_audit.audit_paper_numbers(md, results_json)
+
+    return {
+        "markdown": md,
+        "source": res["source"],
+        "facts_used": facts,
+        "paper_audit": audit,
+        "citations_verified": len(retrieved),
+    }
 
 
 def _fallback_paper(target, analysis, validation, stellar_info,
                      physics_data, plots, literature,
-                     multi_planet_data=None, mc_results=None, novelty=None):
+                     multi_planet_data=None, mc_results=None, novelty=None,
+                     retrieved_papers=None):
     transit = analysis.get("transit", {})
     depth = analysis.get("depth_ppm", 0)
     snr = analysis.get("snr", 0.0)
@@ -193,6 +247,15 @@ def _fallback_paper(target, analysis, validation, stellar_info,
     in_hz = phys.get("in_habitable_zone", False)
     classification = phys.get("planet_classification", "unknown")
     t_dur = phys.get("transit_duration_hours", 0)
+
+    # Estimated values (from models, not direct measurements)
+    est_mass = phys.get("estimated_mass_earth", 0)
+    est_mass_jup = phys.get("estimated_mass_jup", 0)
+    bulk_dens = phys.get("bulk_density_gcm3", 0)
+    tsm_val = phys.get("tsm", 0)
+    tsm_tier = phys.get("tsm_tier", "unknown")
+    esm_val = phys.get("esm", 0)
+    esm_tier = phys.get("esm_tier", "unknown")
 
     novelty_status = novelty.get("status", "UNKNOWN") if novelty else "UNKNOWN"
     novelty_checked = (", ".join(novelty.get("checked", []))
@@ -379,8 +442,8 @@ We employed the **Box Least Squares (BLS)** algorithm as implemented in `astropy
 ### 3.4 Atmospheric Characterization Potential
 | Metric | Value | JWST Tier |
 |--------|-------|-----------|
-| TSM (Transmission) | {tsm_val:.1f} | {tsm_tier} |
-| ESM (Emission) | {esm_val:.3f} | {esm_tier} |
+| TSM (Transmission, estimated) | {tsm_val:.1f} | {tsm_tier} |
+| ESM (Emission, estimated) | {esm_val:.3f} | {esm_tier} |
 
 ### 3.5 Orbital Dynamics
 | Property | Value |
@@ -403,13 +466,13 @@ A 15-test verification protocol was applied following professional exoplanet vet
 | Recurrences | {n_tr} |
 | Planet radius | {rp:.2f} Re |
 | Planet mass (est.) | {est_mass:.2f} Me |
-| Bulk density | {bulk_dens:.2f} g/cm3 |
+| Bulk density (est.) | {bulk_dens:.2f} g/cm3 |
 | Semi-major axis | {a_au:.4f} AU |
 | Equilibrium temperature | {teq:.0f} K |
 | Habitable zone | {"Yes" if in_hz else "No"} |
 | Classification | {classification} |
-| TSM | {tsm_val:.1f} ({tsm_tier}) |
-| ESM | {esm_val:.3f} ({esm_tier}) |
+| TSM (estimated) | {tsm_val:.1f} ({tsm_tier}) |
+| ESM (estimated) | {esm_val:.3f} ({esm_tier}) |
 
 ### 4.1 Verification Test Results
 | Test | Status | Details |

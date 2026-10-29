@@ -319,6 +319,7 @@ def run(target, progress_callback=None):
         multi_planet_data=all_planets,
         mc_results=mc_results,
         novelty=novelty,
+        retrieved_papers=[],  # No arXiv/ADS papers retrieved in transit pipeline yet
     )
 
     _progress("done", "Pipeline complete.")
