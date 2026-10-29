@@ -86,6 +86,8 @@ def test_novelty_known_with_period_match(monkeypatch):
 
     monkeypatch.setattr(datasources, "get_known_planets_near",
                         fake_known_planets_near)
+    monkeypatch.setattr(datasources, "get_known_planet_by_period",
+                        lambda period_days, tolerance=0.01: [])
     monkeypatch.setattr(datasources, "query_exoplanet_archive",
                         fake_query_exoplanet_archive)
     monkeypatch.setattr(datasources, "search_arxiv", fake_search_arxiv)
