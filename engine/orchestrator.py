@@ -20,6 +20,7 @@ v3.0 enhancements:
 import numpy as np
 from engine import ingestion, analyzer, critic, verifier, synthesizer, plots
 from engine import physics, novelty
+from engine import ttv, flares, secondary_eclipse, ephemeris, single_transit
 
 
 def _remove_signal_and_rediscover(time_arr, flux_arr, first_analysis=None,
@@ -322,6 +323,57 @@ def run(target, progress_callback=None):
                 vt_simple["depth_ppm"] > 50000
             )
 
+    _progress("discovery", "Running Track A discovery modules...")
+
+    # --- Track A discovery modules (each optional, wrapped in try/except) ---
+    ttv_result = None
+    try:
+        ttv_result = ttv.compute_ttv(
+            lc["time"], lc["flux"],
+            period_days=primary.get("period_days"),
+            t0=primary.get("transit", {}).get("t0", 0.0),
+            duration_hours=primary.get("transit_duration_hours"),
+        )
+    except Exception as e:
+        ttv_result = {"error": f"{type(e).__name__}: {e}"}
+
+    flare_result = None
+    try:
+        flare_result = flares.detect_flares(lc["time"], lc["flux"])
+    except Exception as e:
+        flare_result = {"error": f"{type(e).__name__}: {e}"}
+
+    eclipse_result = None
+    try:
+        eclipse_result = secondary_eclipse.search_secondary_eclipse(
+            lc["time"], lc["flux"],
+            period_days=primary.get("period_days"),
+            t0=primary.get("transit", {}).get("t0", 0.0),
+            duration_hours=primary.get("transit_duration_hours"),
+        )
+    except Exception as e:
+        eclipse_result = {"error": f"{type(e).__name__}: {e}"}
+
+    ephemeris_result = None
+    try:
+        ephemeris_result = ephemeris.update_ephemeris(
+            lc["time"], lc["flux"],
+            known_period_days=primary.get("period_days"),
+            known_t0=primary.get("transit", {}).get("t0", 0.0),
+            duration_hours=primary.get("transit_duration_hours"),
+        )
+    except Exception as e:
+        ephemeris_result = {"error": f"{type(e).__name__}: {e}"}
+
+    single_transit_result = None
+    try:
+        single_transit_result = single_transit.detect_single_transit(
+            lc["time"], lc["flux"],
+            sigma_threshold=6.0,
+        )
+    except Exception as e:
+        single_transit_result = {"error": f"{type(e).__name__}: {e}"}
+
     _progress("novelty", "Running novelty check against public catalogs...")
 
     nominal_period = primary.get("period_days") or (
@@ -401,4 +453,9 @@ def run(target, progress_callback=None):
         "known_planets": known_planets or [],
         "multi_planet_results": all_planets,
         "monte_carlo": mc_results,
+        "ttv": ttv_result,
+        "flares": flare_result,
+        "secondary_eclipse": eclipse_result,
+        "ephemeris": ephemeris_result,
+        "single_transit": single_transit_result,
     }

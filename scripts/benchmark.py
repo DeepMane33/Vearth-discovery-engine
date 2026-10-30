@@ -2,7 +2,8 @@
 
 Runs the engine's analysis + validation battery on a list of TESS targets and
 compares the engine's verdict against ground truth from the NASA Exoplanet
-Archive. Outputs recall, false-positive rate, and per-test FP catch rates.
+Archive TOI catalog dispositions (CONFIRMED vs FALSE POSITIVE) plus known
+planets. Outputs recall, false-positive rate, and per-test FP catch rates.
 
 No thresholds are tuned. Ground truth comes from the archive, not from memory.
 
@@ -29,19 +30,20 @@ RESULTS_DIR = os.path.join(
     "benchmark",
 )
 
-# Starter target list. Ground truth is looked up live from the NASA Exoplanet
-# Archive for each target, so this list does not need to be perfectly curated.
-# Add or remove targets as needed.
+# Default target list. Includes known hot-Jupiter hosts that must be
+# recovered (WASP-18, WASP-121, HD 209458) and quiet stars that must
+# produce no detection. Ground truth is looked up live from the archive.
 DEFAULT_TARGETS = [
-    "TIC 268684168",
-    "TIC 352359478",
-    "TOI 700",
-    "Pi Mensae",
-    "WASP-18",
-    "HD 209458",
-    "TIC 417780848",   # TOI 700 host
-    "TIC 141147538",   # known quiet-ish star (placeholder - verify)
-    "TIC 306271810",   # placeholder - verify
+    "WASP-18",       # hot Jupiter, deep transit, must be detected
+    "WASP-121",      # hot Jupiter, must be detected
+    "HD 209458",     # hot Jupiter, must be detected
+    "TIC 268684168", # known TOI
+    "TIC 352359478", # known TOI
+    "TOI 700",       # known multi-planet system
+    "Pi Mensae",     # known planet
+    # Quiet stars - should produce no detection:
+    "TIC 141147538",
+    "TIC 306271810",
 ]
 
 ENGINE_VETO_THRESHOLD = 5  # engine vetoes if fewer than this many tests pass
@@ -51,8 +53,6 @@ def _engine_verdict(test_results: dict, snr: float, n_transits: int) -> str:
     """Mirror the engine's rule-based veto logic (critic._rule_veto)."""
     passed = test_results.get("passed_count", 0)
     total = test_results.get("total_tests", 1)
-    depth = None
-    # depth not needed for the verdict string; pass-through is fine
     if passed < ENGINE_VETO_THRESHOLD:
         return "vetoed"
     if snr < 7.0:
@@ -62,9 +62,43 @@ def _engine_verdict(test_results: dict, snr: float, n_transits: int) -> str:
     return "advanced"
 
 
+def _resolve_tic_id(target: str) -> str | None:
+    """Resolve a target to a TIC ID via MAST TIC catalog."""
+    try:
+        from astroquery.mast import Catalogs
+        tic = Catalogs.query_object(target, catalog="TIC", radius=0.002)
+        if tic is not None and len(tic) > 0:
+            return str(tic[0].get("ID", ""))
+    except Exception:
+        pass
+    return None
+
+
+def _query_toi_by_tic(tic_id: str) -> dict | None:
+    """Query the TOI catalog for a given TIC ID.
+
+    Returns dict with disposition, toi_id, period, radius, etc. or None.
+    """
+    if not tic_id:
+        return None
+    try:
+        query = (
+            "SELECT tic_id, toi_id, disposition, pl_orbper, pl_rade, "
+            "pl_eqt, ra, dec FROM toi "
+            f"WHERE tic_id = {tic_id}"
+        )
+        results = datasources.query_exoplanet_archive(query)
+        if results:
+            return results[0]
+    except Exception:
+        pass
+    return None
+
+
 def _ground_truth_known_planet(target: str) -> dict:
     """Query the NASA Exoplanet Archive for known planets near the target.
 
+    Falls back when TOI lookup is unavailable.
     Returns {"known_planet": bool, "planets": [...], "source": "archive"|"error"}
     """
     result = {"known_planet": False, "planets": [], "source": "archive"}
@@ -85,6 +119,39 @@ def _ground_truth_known_planet(target: str) -> dict:
     except Exception as e:
         result["source"] = f"error:{type(e).__name__}"
         return result
+
+
+def _ground_truth_for_target(target: str) -> dict:
+    """Determine ground truth for a target.
+
+    Priority:
+    1. TOI catalog by TIC ID (gives disposition: CONFIRMED / FALSE POSITIVE)
+    2. Known planets near target (Exoplanet Archive)
+    3. Unavailable
+
+    Returns dict with keys:
+        known_planet: bool
+        disposition: str | None  # TOI disposition if available
+        planets: list
+        source: str  # "toi_catalog", "exoplanet_archive", "no_coords", "error:..."
+    """
+    # Try TOI catalog first
+    tic_id = _resolve_tic_id(target)
+    if tic_id:
+        toi = _query_toi_by_tic(tic_id)
+        if toi:
+            disposition = toi.get("disposition", "").upper()
+            return {
+                "known_planet": disposition in ("CONFIRMED", "CANDIDATE"),
+                "disposition": disposition,
+                "planets": [toi],
+                "source": "toi_catalog",
+                "tic_id": tic_id,
+                "toi_id": toi.get("toi_id"),
+            }
+
+    # Fall back to known planets near target
+    return _ground_truth_known_planet(target)
 
 
 def run_target(target: str) -> dict:
@@ -114,8 +181,7 @@ def run_target(target: str) -> dict:
         record["data_source"] = lc.get("source", "unknown")
     except Exception as e:
         record["error"] = f"data_fetch:{type(e).__name__}:{e}"
-        # still attempt ground truth
-        record["ground_truth"] = _ground_truth_known_planet(target)
+        record["ground_truth"] = _ground_truth_for_target(target)
         return record
 
     # --- Analysis ---
@@ -128,7 +194,7 @@ def run_target(target: str) -> dict:
         record["n_transits"] = transit.get("n_transits")
     except Exception as e:
         record["error"] = (record["error"] or "") + f"; analyze:{type(e).__name__}:{e}"
-        record["ground_truth"] = _ground_truth_known_planet(target)
+        record["ground_truth"] = _ground_truth_for_target(target)
         return record
 
     # --- Validation battery ---
@@ -156,7 +222,7 @@ def run_target(target: str) -> dict:
         record["error"] = (record["error"] or "") + f"; validate:{type(e).__name__}:{e}"
 
     # --- Ground truth from archive ---
-    record["ground_truth"] = _ground_truth_known_planet(target)
+    record["ground_truth"] = _ground_truth_for_target(target)
 
     # --- Match engine vs truth ---
     gt = record["ground_truth"]
@@ -252,11 +318,17 @@ def write_outputs(records: list[dict], summary: dict) -> None:
     lines.append("")
     lines.append("## Per-target results")
     lines.append(
-        "| Target | Data source | Engine verdict | Ground truth | Match | Tests passed | Failed tests |"
+        "| Target | Data source | Engine verdict | Ground truth | Disposition | Match | Tests passed | Failed tests |"
     )
     for r in records:
         gt = r["ground_truth"]
-        truth_str = "known planet" if gt.get("known_planet") else "no known planet"
+        if gt.get("known_planet"):
+            truth_str = "known planet / TOI"
+        else:
+            truth_str = "no known planet"
+        disp = gt.get("disposition", "")
+        if disp:
+            truth_str += f" ({disp})"
         if gt.get("source", "").startswith("error") or gt.get("source") == "no_coords":
             truth_str = f"unavailable ({gt.get('source')})"
         match_str = {
