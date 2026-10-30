@@ -266,14 +266,14 @@ def run(target, progress_callback=None):
 
     nominal_period = primary.get("period_days") or (
         primary.get("transit", {}) or {}).get("period")
-    novelty = novelty.check_novelty(
+    novelty_result = novelty.check_novelty(
         target,
         period_days=nominal_period,
         depth_ppm=primary.get("depth_ppm"),
         stellar_info=stellar_info,
         analysis=primary,
     )
-    validation["novelty"] = novelty
+    validation["novelty"] = novelty_result
 
     _progress("verify", "Running AI self-verification dialog...")
 
@@ -318,7 +318,7 @@ def run(target, progress_callback=None):
         plots=gen_plots,
         multi_planet_data=all_planets,
         mc_results=mc_results,
-        novelty=novelty,
+        novelty=novelty_result,
         retrieved_papers=[],  # No arXiv/ADS papers retrieved in transit pipeline yet
     )
 
