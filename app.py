@@ -9,6 +9,7 @@ from flask import Flask, render_template, request, jsonify, Response, send_file
 from engine import orchestrator, ingestion
 from engine import llm as llm_mod
 from engine import chat_assistant
+from engine import target_router
 from config import REPORTS_DIR
 
 app = Flask(__name__)
@@ -65,6 +66,24 @@ def run():
         return render_template("report.html",
                                r={"error": "No target provided.",
                                   "target": ""})
+    # --- Target routing: solar-system vs stellar vs unresolvable ---
+    route = target_router.route_target(target)
+    if route["track"] is None:
+        return render_template("report.html",
+                               r={"error": route["error"],
+                                  "target": target,
+                                  "detection": False})
+    if route["track"] == "B":
+        return render_template("report.html",
+                               r={"error": (
+                                   f"'{target}' is a solar-system body "
+                                   "(Track B). Solar-system research track "
+                                   "is not yet built. Use a stellar/exoplanet "
+                                   "target (e.g. TIC 268684168, TOI 700)."
+                               ),
+                                  "target": target,
+                                  "detection": False})
+    # Track A: stellar/exoplanet. Proceed with the transit pipeline.
     try:
         result = orchestrator.run(target)
         stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -90,10 +109,27 @@ def api_run():
     target = _get_target()
     if not target:
         return jsonify({"error": "no target"}), 400
+
+    # --- Target routing ---
+    route = target_router.route_target(target)
+    if route["track"] is None:
+        return jsonify({"error": route["error"], "target": target}), 400
+    if route["track"] == "B":
+        return jsonify({
+            "error": (
+                f"'{target}' is a solar-system body (Track B). "
+                "Solar-system track not yet built."
+            ),
+            "target": target,
+        }), 400
+
     try:
         result = orchestrator.run(target)
         out = {k: v for k, v in result.items() if k not in ("plot", "plots")}
-        out["paper_md"] = result["paper"]["markdown"]
+        if result.get("paper"):
+            out["paper_md"] = result["paper"]["markdown"]
+        else:
+            out["paper_md"] = None
         out["analysis"] = {k: v for k, v in out["analysis"].items()
                            if k != "flux_residuals"}
         return jsonify(_sanitize(out))
