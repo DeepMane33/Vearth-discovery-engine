@@ -172,19 +172,28 @@ def _fallback_hypothesis(snr, n_tr, depth, period, test_results, rp_rearth=None)
     )
 
 
+def _find_test(test_results, test_name):
+    """Find a test result by name instead of relying on index order."""
+    for t in test_results.get("tests", []):
+        if t.get("test_name") == test_name:
+            return t
+    return None
+
+
 def _fallback_questions(snr, n_tr, depth, period, analysis, rag, test_results, known_planets, rp_rearth=None):
     ids = [r["id"] for r in rag[:3]]
     qs = []
 
+    catalog_test = _find_test(test_results, "Catalog Cross-match")
     qs.append({
         "question": "Is this signal already in the NASA Exoplanet Archive?",
         "answer": (
-            f"Catalog cross-match: {test_results['tests'][-1]['details']}"
-            if test_results["tests"][-1]["test_name"] == "Catalog Cross-match"
+            f"Catalog cross-match: {catalog_test['details']}"
+            if catalog_test
             else "Catalog data not checked."
         ),
-        "resolved_true_or_false": test_results["tests"][-1].get("passed", True)
-            if test_results["tests"][-1]["test_name"] == "Catalog Cross-match" else True,
+        "resolved_true_or_false": catalog_test.get("passed", True)
+        if catalog_test else True,
     })
 
     qs.append({
@@ -199,26 +208,34 @@ def _fallback_questions(snr, n_tr, depth, period, analysis, rag, test_results, k
         "resolved_true_or_false": n_tr >= 3,
     })
 
+    odd_even = _find_test(test_results, "Odd-Even Depth")
+    secondary = _find_test(test_results, "Secondary Eclipse")
+    vshape = _find_test(test_results, "V-Shape Test")
     qs.append({
         "question": "Could the dip be from an eclipsing binary rather than a planet?",
         "answer": (
-            f"Odd-even test: {test_results['tests'][3]['details']} "
-            f"Secondary eclipse: {test_results['tests'][4]['details']} "
-            f"V-shape: {test_results['tests'][5]['details']}"
+            f"Odd-even test: {odd_even['details'] if odd_even else 'not run'} "
+            f"Secondary eclipse: {secondary['details'] if secondary else 'not run'} "
+            f"V-shape: {vshape['details'] if vshape else 'not run'}"
         ),
         "resolved_true_or_false": all(
-            t["passed"] for t in test_results["tests"][3:6]
+            t.get("passed", False) for t in [odd_even, secondary, vshape] if t
         ),
     })
 
+    bootstrap = _find_test(test_results, "Bootstrap FAP")
+    stellar_var = _find_test(test_results, "Stellar Variability")
     qs.append({
         "question": "Is the signal a noise artifact or stellar variability?",
         "answer": (
-            f"Bootstrap FAP: {test_results['tests'][6]['details']} "
-            f"Stellar variability: {test_results['tests'][7]['details']}"
+            f"Bootstrap FAP: {bootstrap['details'] if bootstrap else 'not run'} "
+            f"Stellar variability: {stellar_var['details'] if stellar_var else 'not run'}"
         ),
-        "resolved_true_or_false": test_results["tests"][6].get("passed", True)
-            and test_results["tests"][7].get("passed", True),
+        "resolved_true_or_false": (
+            bootstrap.get("passed", True) if bootstrap else True
+        ) and (
+            stellar_var.get("passed", True) if stellar_var else True
+        ),
     })
 
     if rp_rearth:

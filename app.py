@@ -70,7 +70,10 @@ def run():
         stamp = time.strftime("%Y%m%d-%H%M%S")
         fname = REPORTS_DIR / f"{target.replace(' ', '_')}_{stamp}.json"
         safe = {k: v for k, v in result.items() if k not in ("plot", "plots")}
-        safe["paper_md"] = result["paper"]["markdown"]
+        if result.get("paper"):
+            safe["paper_md"] = result["paper"]["markdown"]
+        else:
+            safe["paper_md"] = None
         fname.write_text(json.dumps(_sanitize(safe), indent=2))
         return render_template("report.html", r=result)
     except Exception as e:
@@ -78,7 +81,8 @@ def run():
         traceback.print_exc()
         return render_template("report.html",
                                r={"error": f"{type(e).__name__}: {e}",
-                                  "target": target})
+                                  "target": target,
+                                  "detection": False})
 
 
 @app.route("/api/run", methods=["POST"])
@@ -164,7 +168,7 @@ def report_page(run_id):
                                r={"error": "Report not found.", "target": target_part})
     data = json.loads(reports[0].read_text())
 
-    data["paper"] = {"markdown": data.pop("paper_md", ""), "source": "llm"}
+    data["paper"] = {"markdown": data.pop("paper_md", None), "source": "llm"}
     data["plots"] = {}
 
     return render_template("report.html", r=data, run_id=run_id)

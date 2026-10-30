@@ -8,6 +8,18 @@
   <pre>{{ r.error }}</pre>
   <p><a href="/">&#8592; back</a></p>
 </div>
+{% elif r.detection is false or r.detection is false %}
+<div class="panel error">
+  <h2>No detection</h2>
+  <p>The pipeline did not detect a significant transit signal for
+  <b>{{ r.target }}</b>.</p>
+  <ul>
+  {% for reason in r.veto_reasons %}
+    <li>{{ reason }}</li>
+  {% endfor %}
+  </ul>
+  <p><a href="/">&#8592; new run</a></p>
+</div>
 {% else %}
 
 <div class="breadcrumb"><a href="/">&#8592; new run</a></div>

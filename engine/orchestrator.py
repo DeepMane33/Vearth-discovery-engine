@@ -181,6 +181,25 @@ def run(target, progress_callback=None):
 
     lc = ingestion.fetch_tess_light_curve(target)
 
+    # --- Data quality validation: fail loudly on bad or synthetic data ---
+    n_points = int(len(lc["time"]))
+    if n_points < 50:
+        raise RuntimeError(
+            f"Insufficient light curve points for '{target}': {n_points} "
+            f"(minimum 50 required). Cannot proceed."
+        )
+    if lc.get("source") == "synthetic":
+        raise RuntimeError(
+            f"Synthetic light curve detected for '{target}'. "
+            "Real TESS data is required; synthetic data is not allowed "
+            "in the pipeline."
+        )
+    if lc.get("source", "unknown") == "unknown":
+        raise RuntimeError(
+            f"Unknown data source for '{target}'. Cannot verify data "
+            "provenance; aborting."
+        )
+
     _progress("crossmatch", "Checking for known planets in catalogs...")
 
     known_planets = None
@@ -246,6 +265,47 @@ def run(target, progress_callback=None):
         known_planets=known_planets,
         stellar_info=stellar_info,
     )
+
+    # --- Veto gating: short no-detection report if S/N or verdict fails ---
+    snr = primary.get("snr", 0.0)
+    depth_ppm = primary.get("depth_ppm", 0)
+    n_transits = primary.get("transit", {}).get("n_transits", 0)
+    tests_passed = validation.get("verification_tests", {}).get("passed_count", 0)
+    tests_total = validation.get("verification_tests", {}).get("total_tests", 0)
+
+    veto_reasons = []
+    if snr < 7.0:
+        veto_reasons.append(f"S/N {snr:.2f} below threshold 7.0")
+    if n_transits < 3:
+        veto_reasons.append(f"only {n_transits} transits (minimum 3 required)")
+    if tests_passed < 5:
+        veto_reasons.append(f"only {tests_passed}/{tests_total} tests passed")
+    if validation.get("veto", True):
+        veto_reasons.append(f"critic veto: {validation.get('reason', 'unspecified')}")
+
+    if veto_reasons:
+        _progress("done", "Pipeline complete: no detection.")
+        return {
+            "target": target,
+            "detection": False,
+            "veto_reasons": veto_reasons,
+            "ingestion": {
+                "source": lc.get("source", "unknown"),
+                "n_points": n_points,
+                "mission_summary": stellar_info.get("mission_summary", {}),
+            },
+            "stellar_info": stellar_info,
+            "analysis": primary,
+            "physics": None,
+            "validation": validation,
+            "self_verification": None,
+            "paper": None,
+            "plots": {},
+            "known_planets": known_planets or [],
+            "multi_planet_results": [],
+            "monte_carlo": None,
+            "novelty": None,
+        }
 
     for pm in all_planets:
         if pm["planet_number"] > 1:

@@ -19,7 +19,7 @@ drafts an IMRaD research report citing the exact data logs.
 
 Eight stages, one loop:
 
-1. **Collector** — `astroquery.mast` downloads the TESS light curve (cached). Also queries Gaia DR3, TIC, and Kepler/K2. Falls back to a synthetic curve offline.
+1. **Collector** — `astroquery.mast` downloads the TESS light curve (cached). Also queries Gaia DR3, TIC, and Kepler/K2. Real data only; no synthetic fallback.
 2. **Cross-match** — checks NASA Exoplanet Archive for known planets near the target.
 3. **Finder** — detrend + box-least-squares transit search + IsolationForest outliers. Sequentially detects up to 5 planets.
 4. **Validator** — 15-test verification battery (SNR, recurrence, odd-even, secondary eclipse, V-shape, bootstrap FAP, stellar variability, physical plausibility, catalog cross-match, phase curve, chromaticity, harmonic alias, transit shape, window function, stellar density consistency).
@@ -55,7 +55,7 @@ transparent, rule-based fallback for the Critic and Writer (clearly labelled
 
 - Single-band TESS photometry cannot confirm a planet; this is a research
   *prototyping* engine, not a discovery authority.
-- Findings are conservative (default: veto unless S/N >= 7 and >= 2 recurrences).
+- Findings are conservative (default: veto unless S/N >= 7 and >= 3 recurrences and >= 5/15 verification tests pass).
 - Saved JSON reports land in `data/reports/`.
 
 ## Layout

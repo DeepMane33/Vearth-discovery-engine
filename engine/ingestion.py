@@ -149,9 +149,12 @@ def fetch_stellar_info(target):
         }
 
 
-def fetch_tess_light_curve(target="TIC 268684168", n_samples=2000):
+def fetch_tess_light_curve(target="TIC 268684168", n_samples=2000,
+                           allow_synthetic=False):
     """Download a TESS light curve from MAST. Returns dict of arrays.
-    Falls back to synthetic data if offline / astroquery missing.
+
+    Raises RuntimeError if real TESS data cannot be fetched. Synthetic
+    fallback is only available via allow_synthetic=True (unit tests only).
     Also attaches comprehensive metadata from SIMBAD, Gaia, Vizier."""
     key = target.replace(" ", "_")
     out = CACHE_DIR / f"{key}.npz"
@@ -211,14 +214,21 @@ def fetch_tess_light_curve(target="TIC 268684168", n_samples=2000):
         result["metadata"] = fetch_comprehensive_metadata(target)
         return result
     except Exception as e:
-        lc = _synthetic_light_curve(n_samples, seed=hash(target) % 2 ** 31)
-        lc["source"] = "synthetic"
-        lc["note"] = f"synthetic fallback ({type(e).__name__}: {e})"
-        np.savez(out, **lc)
-        m[key] = time.time()
-        _save_manifest(m)
-        lc["metadata"] = fetch_comprehensive_metadata(target)
-        return lc
+        if allow_synthetic:
+            lc = _synthetic_light_curve(n_samples, seed=hash(target) % 2 ** 31)
+            lc["source"] = "synthetic"
+            lc["note"] = f"synthetic fallback ({type(e).__name__}: {e})"
+            np.savez(out, **lc)
+            m[key] = time.time()
+            _save_manifest(m)
+            lc["metadata"] = fetch_comprehensive_metadata(target)
+            return lc
+        raise RuntimeError(
+            f"Could not fetch real TESS light curve for '{target}': "
+            f"{type(e).__name__}: {e}. "
+            "Synthetic fallback is disabled in the pipeline; use "
+            "allow_synthetic=True only for unit tests."
+        )
 
 
 def _synthetic_light_curve(n=2000, period=3.141, depth=0.008, seed=0):

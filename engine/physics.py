@@ -438,6 +438,14 @@ def compute_all_physics(analysis, stellar_params=None):
         result["stellar_feh"] = feh
         result["stellar_radius_rsun"] = rs
         result["stellar_mass_msun"] = ms
+        # Flag whether stellar params came from a catalog or were assumed
+        has_real = (
+            stellar_params.get("pl_star_teff") is not None
+            and stellar_params.get("pl_star_radius") is not None
+        )
+        result["stellar_params_source"] = (
+            "measured" if has_real else "assumed_solar"
+        )
     else:
         teff = 5778
         rs = 1.0
@@ -445,6 +453,7 @@ def compute_all_physics(analysis, stellar_params=None):
         result["stellar_teff"] = teff
         result["stellar_radius_rsun"] = rs
         result["stellar_mass_msun"] = ms
+        result["stellar_params_source"] = "assumed_solar"
 
     if period and period > 0:
         rp_earth = planet_radius_from_depth(depth_frac, rs)
