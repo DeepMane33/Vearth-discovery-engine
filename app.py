@@ -5,9 +5,10 @@ import threading
 import numpy as np
 import markdown
 from markupsafe import Markup
-from flask import Flask, render_template, request, jsonify, Response
+from flask import Flask, render_template, request, jsonify, Response, send_file
 from engine import orchestrator, ingestion
 from engine import llm as llm_mod
+from engine import chat_assistant
 from config import REPORTS_DIR
 
 app = Flask(__name__)
@@ -166,7 +167,72 @@ def report_page(run_id):
     data["paper"] = {"markdown": data.pop("paper_md", ""), "source": "llm"}
     data["plots"] = {}
 
-    return render_template("report.html", r=data)
+    return render_template("report.html", r=data, run_id=run_id)
+
+
+def _load_results_for_run(run_id: str) -> dict | None:
+    """Load the saved results JSON for a run_id."""
+    target_part = run_id.rsplit("_", 1)[0] if "_" in run_id else run_id
+    reports = sorted(REPORTS_DIR.glob(f"{target_part}_*.json"), reverse=True)
+    if not reports:
+        return None
+    data = json.loads(reports[0].read_text())
+    data["paper"] = {"markdown": data.pop("paper_md", ""), "source": "llm"}
+    data["plots"] = {}
+    return data
+
+
+@app.route("/api/paper/download/<run_id>")
+def download_paper(run_id: str):
+    """Download the research paper as a Markdown file."""
+    data = _load_results_for_run(run_id)
+    if data is None:
+        return jsonify({"error": "report not found"}), 404
+    paper_md = data.get("paper", {}).get("markdown", "")
+    if not paper_md:
+        return jsonify({"error": "no paper content"}), 404
+    target = data.get("target", "report")
+    fname = f"{target.replace(' ', '_')}_research_paper.md"
+    return Response(
+        paper_md,
+        mimetype="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.route("/api/chat/send/<run_id>", methods=["POST"])
+def chat_send(run_id: str):
+    """Send a message to the AI research assistant."""
+    data = _load_results_for_run(run_id)
+    if data is None:
+        return jsonify({"error": "report not found"}), 404
+
+    body = request.get_json(silent=True) or {}
+    question = (body.get("message") or "").strip()
+    if not question:
+        return jsonify({"error": "empty message"}), 400
+
+    try:
+        answer = chat_assistant.ask_assistant(question, data, run_id)
+        return jsonify({"answer": answer})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
+
+@app.route("/api/chat/history/<run_id>", methods=["GET"])
+def chat_history(run_id: str):
+    """Get chat history for a run."""
+    history = chat_assistant.load_history(run_id)
+    return jsonify({"history": history})
+
+
+@app.route("/api/chat/clear/<run_id>", methods=["POST"])
+def chat_clear(run_id: str):
+    """Clear chat history for a run."""
+    chat_assistant.clear_history(run_id)
+    return jsonify({"status": "cleared"})
 
 
 @app.template_filter("md")

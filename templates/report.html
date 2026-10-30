@@ -210,11 +210,94 @@
 {% endif %}
 
 <section class="panel paper">
-  <h2>Research Paper <span class="small">({{ r.paper.source }})</span></h2>
+  <h2>Research Paper <span class="small">({{ r.paper.source }})</h2>
+  <a href="{{ url_for('download_paper', run_id=run_id) }}" class="btn">&#8593; Download Paper (.md)</a>
   <div class="paperbody">
     {{ r.paper.markdown|md }}
   </div>
 </section>
 
+<section class="panel chat-panel">
+  <h2>AI Research Assistant <span class="small">ask about this run</span></h2>
+  <p class="small">Ask: "How was the planet radius calculated?", "What does TSM mean?", "Why was this vetoed?"</p>
+  <div id="chatMessages" class="chat-messages"></div>
+  <div class="chat-input">
+    <input type="text" id="chatInput" placeholder="Ask a question about this research...">
+    <button id="chatSend">Send</button>
+    <button id="chatClear" class="btn-clear">Clear history</button>
+  </div>
+  <div id="chatStatus" class="small"></div>
+</section>
+
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const runId = "{{ run_id }}";
+const chatMsgs = document.getElementById('chatMessages');
+const chatInput = document.getElementById('chatInput');
+const chatSend = document.getElementById('chatSend');
+const chatClear = document.getElementById('chatClear');
+const chatStatus = document.getElementById('chatStatus');
+
+function addMessage(role, content) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + role;
+  const prefix = role === 'user' ? 'You: ' : 'Assistant: ';
+  div.innerHTML = '<strong>' + prefix + '</strong>' + content.replace(/\n/g, '<br>');
+  chatMsgs.appendChild(div);
+  chatMsgs.scrollTop = chatMsgs.scrollHeight;
+}
+
+function loadHistory() {
+  fetch('/api/chat/history/' + runId)
+    .then(r => r.json())
+    .then(data => {
+      chatMsgs.innerHTML = '';
+      (data.history || []).forEach(m => addMessage(m.role, m.content));
+    })
+    .catch(() => {});
+}
+
+chatSend.addEventListener('click', () => {
+  const text = chatInput.value.trim();
+  if (!text) return;
+  addMessage('user', text);
+  chatInput.value = '';
+  chatStatus.textContent = 'Thinking...';
+  fetch('/api/chat/send/' + runId, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({message: text})
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) {
+      addMessage('assistant', 'Error: ' + data.error);
+    } else {
+      addMessage('assistant', data.answer);
+    }
+    chatStatus.textContent = '';
+  })
+  .catch(() => {
+    addMessage('assistant', 'Error sending message.');
+    chatStatus.textContent = '';
+  });
+});
+
+chatInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') chatSend.click();
+});
+
+chatClear.addEventListener('click', () => {
+  fetch('/api/chat/clear/' + runId, {method: 'POST'})
+    .then(() => {
+      chatMsgs.innerHTML = '';
+      chatStatus.textContent = 'History cleared.';
+    });
+});
+
+loadHistory();
+</script>
 {% endblock %}

@@ -157,3 +157,28 @@ button:disabled{opacity:.6;cursor:default}
 .tag.warn{color:var(--warn);border-color:var(--warn);background:#faf5f0}
 .multi-planet{border-color:#7c3aed}
 .multi-planet h2{color:#7c3aed}
+
+.btn{
+  display:inline-block;padding:8px 14px;font-size:14px;font-weight:600;
+  border:none;border-radius:6px;background:var(--accent);color:#fff;cursor:pointer;
+  text-decoration:none;margin:8px 0
+}
+.btn:hover{filter:brightness(1.08)}
+
+.chat-panel{margin-top:18px}
+.chat-messages{
+  max-height:300px;overflow-y:auto;border:1px solid var(--line);
+  border-radius:6px;background:var(--bg);padding:12px;margin:8px 0;font-size:14px;
+  font-family:var(--sans)
+}
+.chat-msg{margin:8px 0;padding:8px 12px;border-radius:6px}
+.chat-msg.user{background:var(--surface);border-left:3px solid var(--accent)}
+.chat-msg.assistant{background:#f0f7f3;border-left:3px solid var(--good)}
+.chat-msg strong{color:var(--ink)}
+.chat-input{display:flex;gap:8px;margin-top:8px}
+.chat-input input{flex:1;padding:10px 12px;font-size:14px;border:1px solid var(--line);
+  border-radius:6px;background:var(--bg)}
+.chat-input button{padding:10px 16px;font-size:14px}
+.btn-clear{background:transparent;border:1px solid var(--line);color:var(--muted)}
+.btn-clear:hover{border-color:var(--bad);color:var(--bad)}
+.chat-status{font-size:12px;color:var(--muted);margin-top:6px}
